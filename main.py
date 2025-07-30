@@ -79,6 +79,9 @@ async def verify_token(authorization: Optional[str] = Header(None)):
            status_code=status.HTTP_403_FORBIDDEN,
            detail="Invalid token",
        )
+   print("📛 Provided token:", token)
+   print("🔒 Expected token:", EXPECTED_BEARER_TOKEN)
+
    # If we reach here, the token is valid.
    # We don't need to return anything. If an exception isn't raised, FastAPI proceeds.
 
