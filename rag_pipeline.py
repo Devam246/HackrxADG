@@ -593,9 +593,9 @@ def handle_queries(
     embs_full = embed_cohere(texts, model="embed-english-v3.0", batch_size=96)
 
 # Reduce dimensions + get PCA model
-    pca_start = time.perf_counter()
-    embs_reduced, pca_model = reduce_dimensions(embs_full, target_dim=512)
-    print(f"⚡ PCA took {time.perf_counter() - pca_start:.2f} seconds")
+    # pca_start = time.perf_counter()
+    # embs_reduced, pca_model = reduce_dimensions(embs_full, target_dim=512)
+    # print(f"⚡ PCA took {time.perf_counter() - pca_start:.2f} seconds")
     
 # Build inverted keyword index
     inv_index = build_inverted_index(chunks)
@@ -604,14 +604,15 @@ def handle_queries(
     # 3.1 Batch‑embed + PCA
     t0 = time.time()
     q_raw = embed_cohere(queries)                       # (N, D)
-    q_red = pca_model.transform(q_raw)                  # (N, d_reduced)
+    # q_red = pca_model.transform(q_raw)     
+    q_red = q_raw            
     timings['embed+PCA'] = time.time() - t0
 
     # 3.2 Parallel retrieval of top_k chunks
     def retrieve_one(i):
         qv = q_red[i].astype("float32")
         cands = filter_candidates(inv_index, queries[i], len(chunks))
-        _, idxs = search_masked_subset(qv, cands, embs_reduced, top_k)
+        _, idxs = search_masked_subset(qv, cands, embs_full, top_k)
         return [chunks[j] for j in idxs]
 
     t1 = time.time()
