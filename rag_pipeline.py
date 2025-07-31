@@ -631,14 +631,14 @@ def extract_chunks_from_any_file(file_url: str):
     print(f"🧩 Total chunks generated: {len(chunks)}")
 
     print(f"🕒 Total Time: {time.time() - start_total:.2f} seconds")
-_______________________________________________________________________________
+#_______________________________________________________________________________
  # 3. Save the newly generated chunks to the cache before returning.
     print(f"💾 Saving chunks to cache: {chunk_cache_path}")
     with open(chunk_cache_path, "wb") as f:
         pickle.dump(chunks, f)
 
     print(f"🕒 Total Time (processed and cached): {time.time() - start_total:.2f} seconds")
-________________________________________________________________________________
+#________________________________________________________________________________
     return chunks, doc_id 
 #(returning both chunks and doc_id ABOVE)
     #return chunks
@@ -646,6 +646,7 @@ ________________________________________________________________________________
 def handle_queries(
     queries: List[str],
     chunks,
+    doc_id: str, # Accept the document ID
     top_k: int = 5
 ) -> List[Dict]:
     """
@@ -656,7 +657,22 @@ def handle_queries(
       - single Gemini call
     Returns: list of plain answer strings
     """
+    #________________________________________________________________________
+    embedding_cache_path = CACHE_DIR / f"embeddings_{doc_id}.npy"
+       # Check if embeddings for this document are already cached.
+    if embedding_cache_path.exists():
+        print(f"✅ CACHE HIT for embeddings. Loading from {embedding_cache_path}")
+        embs_full = np.load(embedding_cache_path)
+    else:
+        print("⚠️ CACHE MISS for embeddings. Generating and saving.")
+        texts = [chunk['text'] for chunk in chunks]
+        # Embed the chunks using Cohere
+        #embs_full = embed_cohere(texts, model="embed-english-v3.0", batch_size=96)
+        embs_full = embed_voyage(texts, model="voyage-3.5")
 
+        # Save the numpy array to the cache file.
+        np.save(embedding_cache_path, embs_full)
+    #__________________________________________________________________________
     print("\n🟢 [handle_queries] Starting query handling")
     print(f"🔍 Total queries received: {len(queries)}")
     for i, q in enumerate(queries, start=1):
@@ -666,11 +682,11 @@ def handle_queries(
     timings = {}
 
     # 1. Embed chunks using Voyage
-    texts = [chunk['text'] for chunk in chunks]
-    t0 = time.time()
-    embs_full = embed_voyage(texts, model="embed-english-v3.0", batch_size=96)
-    timings['chunk_embedding'] = time.time() - t0
-    print(f"🧠 Embedded {len(texts)} chunks in {timings['chunk_embedding']:.3f} sec")
+    #texts = [chunk['text'] for chunk in chunks]
+    #t0 = time.time()
+    #embs_full = embed_voyage(texts, model="embed-english-v3.0", batch_size=96)
+    #timings['chunk_embedding'] = time.time() - t0
+    #print(f"🧠 Embedded {len(texts)} chunks in {timings['chunk_embedding']:.3f} sec")
 
     # 2. Build inverted keyword index
     inv_index = build_inverted_index(chunks)
