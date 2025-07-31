@@ -124,6 +124,9 @@ async def run_rag_system(
    """
    Main endpoint to handle document URL + questions and return LLM answers.
    """
+# 1. Chunk the document (this now returns chunks AND a doc_id)
+#    The doc_id is essential for caching the next steps.
+
 
    try:
        start = time.perf_counter()
@@ -131,12 +134,14 @@ async def run_rag_system(
        print(f"Total questions: {len(request_data.questions)}")
 
        # 1. Chunk the document (PDF, DOCX, EML)
-       chunks = extract_chunks_from_any_file(str(request_data.documents))
+      chunks, doc_id = extract_chunks_from_any_file(str(request_data.documents))
+       #chunks = extract_chunks_from_any_file(str(request_data.documents))
 
        # 2. Use RAG to get answers
        answers = handle_queries(
            queries=request_data.questions,
            chunks=chunks,
+          doc_id=doc_id, # Pass the unique document ID here
            top_k=3  # Adjust this based on your needs
        )
        total_time = time.perf_counter() - start
