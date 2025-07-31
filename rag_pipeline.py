@@ -10,7 +10,7 @@ import spacy
 import tiktoken
 import requests
 import fitz 
-_____________________________________________________________________________
+# _____________________________________________________________________________
 #                        CATCHING CODE
 # Step 1: Setup and Caching Utilities
 
@@ -37,7 +37,7 @@ def get_doc_id(url: str) -> str:
     """
     # Create a SHA256 hash of the URL and return its hex digest.
     return hashlib.sha256(url.encode()).hexdigest()
-_____________________________________________________________________________
+# _____________________________________________________________________________
 # Initialize spaCy for sentence splitting (optional)
 nlp = spacy.load("en_core_web_sm")
 
