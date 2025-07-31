@@ -583,16 +583,15 @@ def extract_chunks_from_any_file(file_url: str):
     start_total = time.time()
     __________________________________________________________________
     # 1. Generate a unique ID for the document to use as a cache key.
-    #doc_id = get_doc_id(file_url)
-    #chunk_cache_path = CACHE_DIR / f"chunks_{doc_id}.pkl"
+    doc_id = get_doc_id(file_url)
+    chunk_cache_path = CACHE_DIR / f"chunks_{doc_id}.pkl"
     # 2. Check if the chunks are already cached.
-    #if chunk_cache_path.exists():
-     #   print(f"✅ CACHE HIT for chunks. Loading from {chunk_cache_path}")
-      #  with open(chunk_cache_path, "rb") as f:
-       #     chunks = pickle.load(f)
-        #print(f"🕒 Total Time (from cache): {time.time() - start_total:.2f} seconds")
-        # We need to return the chunks AND the doc_id for the next caching step.
-        #return chunks, doc_id
+    if chunk_cache_path.exists():
+        print(f"✅ CACHE HIT for chunks. Loading from {chunk_cache_path}")
+        with open(chunk_cache_path, "rb") as f:
+            chunks = pickle.load(f)
+        print(f"🕒 Total Time (from cache): {time.time() - start_total:.2f} seconds")
+        return chunks, doc_id
     ___________________________________________________________________
 
     # Step 1: Download the file
@@ -634,15 +633,15 @@ def extract_chunks_from_any_file(file_url: str):
     print(f"🕒 Total Time: {time.time() - start_total:.2f} seconds")
 _______________________________________________________________________________
  # 3. Save the newly generated chunks to the cache before returning.
- #   print(f"💾 Saving chunks to cache: {chunk_cache_path}")
-  #  with open(chunk_cache_path, "wb") as f:
-   #     pickle.dump(chunks, f)
+    print(f"💾 Saving chunks to cache: {chunk_cache_path}")
+    with open(chunk_cache_path, "wb") as f:
+        pickle.dump(chunks, f)
 
-    #print(f"🕒 Total Time (processed and cached): {time.time() - start_total:.2f} seconds")
+    print(f"🕒 Total Time (processed and cached): {time.time() - start_total:.2f} seconds")
 ________________________________________________________________________________
-#    return chunks, doc_id 
+    return chunks, doc_id 
 #(returning both chunks and doc_id ABOVE)
-    return chunks
+    #return chunks
 
 def handle_queries(
     queries: List[str],
