@@ -334,7 +334,7 @@ def get_voyage_client():
 import numpy as np
 from typing import List
 
-# def embed_cohere(texts: List[str], model="embed-english-v3.0", batch_size=96) -> np.ndarray:
+# def embed_cohere(texts: List[str], model="embed-english-v3.0", batch_size=300) -> np.ndarray:
 #     """
 #     Batch-embed texts using OpenAI embeddings API.
 #     Returns: (N, D) array of embeddings.
@@ -350,7 +350,7 @@ from typing import List
 #         embeddings.extend(resp.embeddings)
 
 #     return np.array(embeddings, dtype='float32')
-def embed_voyage(texts: List[str], model: str = "voyage-3.5", batch_size=96) -> np.ndarray:
+def embed_voyage(texts: List[str], model: str = "voyage-3.5", batch_size=300) -> np.ndarray:
     """
     Embed texts using Voyage AI embeddings API.
     Returns: (N, D) array of embeddings.
@@ -667,8 +667,8 @@ def handle_queries(
         print("⚠️ CACHE MISS for embeddings. Generating and saving.")
         texts = [chunk['text'] for chunk in chunks]
         # Embed the chunks using Cohere
-        #embs_full = embed_cohere(texts, model="embed-english-v3.0", batch_size=96)
-        embs_full = embed_voyage(texts, model="voyage-3.5", batch_size=96)
+        #embs_full = embed_cohere(texts, model="embed-english-v3.0", batch_size=300)
+        embs_full = embed_voyage(texts, model="voyage-3.5", batch_size=300)
 
         # Save the numpy array to the cache file.
         np.save(embedding_cache_path, embs_full)
@@ -684,7 +684,7 @@ def handle_queries(
     # 1. Embed chunks using Voyage
     #texts = [chunk['text'] for chunk in chunks]
     #t0 = time.time()
-    #embs_full = embed_voyage(texts, model="embed-english-v3.0", batch_size=96)
+    #embs_full = embed_voyage(texts, model="embed-english-v3.0", batch_size=300)
     #timings['chunk_embedding'] = time.time() - t0
     #print(f"🧠 Embedded {len(texts)} chunks in {timings['chunk_embedding']:.3f} sec")
 
