@@ -19,7 +19,7 @@ import pickle # For saving/loading python objects (like our list of chunks)
 import hashlib # For creating a unique ID from the document URL
 from pathlib import Path # For modern file path handling
 import numpy as np # Already imported, but ensure it's there for saving embeddings
-
+from typing import List
 # --- Caching Setup ---
 """
 CMT ADDED BY ME
@@ -352,12 +352,26 @@ from typing import List
 #     return np.array(embeddings, dtype='float32')
 def embed_voyage(texts: List[str], model: str = "voyage-3.5", batch_size=300) -> np.ndarray:
     """
-    Embed texts using Voyage AI embeddings API.
+    Embed texts using Voyage AI embeddings API, processing them in batches
+    to avoid exceeding API limits.
     Returns: (N, D) array of embeddings.
     """
     vo = get_voyage_client()
-    response = vo.embed(texts=texts, model=model)
-    return np.array(response.embeddings, dtype='float32')
+    all_embeddings = []
+
+    # Loop through the texts in chunks of 'batch_size'
+    for i in range(0, len(texts), batch_size):
+        # Create a batch of texts to process
+        batch = texts[i:i + batch_size]
+        
+        # Get embeddings for the current batch
+        response = vo.embed(texts=batch, model=model)
+        
+        # Add the new embeddings to our list
+        all_embeddings.extend(response.embeddings)
+    
+    # Convert the list of embeddings to a single NumPy array
+    return np.array(all_embeddings, dtype='float32')
 
 # ============================================
 # 2. Dimensionality Reduction & Quantization
