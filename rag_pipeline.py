@@ -279,9 +279,9 @@ from typing import List, Dict, Set
 import numpy as np
 import faiss
 
-# For OpenAI embeddings (Now Cohere HiHi)
+# For OpenAI embeddings (Now Cohere HiHi) (Now Voyage HAhaHA)
 # import openai
-import cohere
+import voyageai
 
 # For local sentence-transformer embeddings
 
@@ -294,8 +294,11 @@ import spacy
 # Initialize spaCy for keyword extraction
 nlp = spacy.load("en_core_web_sm")
 
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
-co = cohere.Client(COHERE_API_KEY)
+@lru_cache()
+def get_voyage_client():
+    VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
+    return voyageai.Client(api_key=VOYAGE_API_KEY)
+
 
 # ============================================
 # 1. Embedding Functions
@@ -303,22 +306,30 @@ co = cohere.Client(COHERE_API_KEY)
 import numpy as np
 from typing import List
 
-def embed_cohere(texts: List[str], model="embed-english-v3.0", batch_size=96) -> np.ndarray:
+# def embed_cohere(texts: List[str], model="embed-english-v3.0", batch_size=96) -> np.ndarray:
+#     """
+#     Batch-embed texts using OpenAI embeddings API.
+#     Returns: (N, D) array of embeddings.
+#     """
+#     embeddings = []
+#     for i in range(0, len(texts), batch_size):
+#         batch = texts[i:i + batch_size]
+#         resp = co.embed(
+#             texts=batch,
+#             model=model,
+#             input_type="search_document"  # use "search_query" if embedding a user query
+#         )
+#         embeddings.extend(resp.embeddings)
+
+#     return np.array(embeddings, dtype='float32')
+def embed_voyage(texts: List[str], model: str = "voyage-3.5") -> np.ndarray:
     """
-    Batch-embed texts using OpenAI embeddings API.
+    Embed texts using Voyage AI embeddings API.
     Returns: (N, D) array of embeddings.
     """
-    embeddings = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        resp = co.embed(
-            texts=batch,
-            model=model,
-            input_type="search_document"  # use "search_query" if embedding a user query
-        )
-        embeddings.extend(resp.embeddings)
-
-    return np.array(embeddings, dtype='float32')
+    vo = get_voyage_client()
+    response = vo.embed(texts=texts, model=model)
+    return np.array(response.embeddings, dtype='float32')
 
 # ============================================
 # 2. Dimensionality Reduction & Quantization
@@ -445,11 +456,16 @@ from concurrent.futures import ThreadPoolExecutor
 # 0) Imports & LLM Client Setup (run once)
 # ──────────────────────────────────────────────────────────────────────────────
 import os, time, json
-import google.generativeai as genai
-# configure Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+from functools import lru_cache
+
+@lru_cache()
+def get_gemini_model():
+    import google.generativeai as genai
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    genai.configure(api_key=GEMINI_API_KEY)
+    return genai.GenerativeModel("gemini-2.5-flash-lite")
+
 
 def build_batch_prompt(
     queries: List[str],
@@ -467,6 +483,7 @@ def build_batch_prompt(
     "from the policy document. For each question:\n\n"
     "- Read the question carefully.\n"
     "- Use the supporting clauses provided to generate a clear, correct, and concise answer.\n"
+    "- if you find information not mentioned then try to most relevent fact from clauses and also use your general knowlege to factify it the very best\n"
     "- Do not make up facts not present in the clauses.\n"
     "- Your final output must ONLY be a JSON object with an 'answers' key, "
     "which contains a list of plain English answers (one for each question) in order.\n\n"
@@ -499,6 +516,7 @@ def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048):
     """
     Use Gemini developer API to send prompt and get JSON response.
     """
+    gemini_model = get_gemini_model()
     response = gemini_model.generate_content(
         contents=[
             {"role": "user", "parts": [system]},
@@ -586,58 +604,68 @@ def handle_queries(
       - parallel keyword+FAISS retrieval
       - build batch prompt
       - single Gemini call
-    Returns: list of answer dicts.
+    Returns: list of plain answer strings
     """
-    texts = [chunk['text'] for chunk in chunks]
-    # Embed the chunks using Cohere
-    embs_full = embed_cohere(texts, model="embed-english-v3.0", batch_size=96)
 
-# Reduce dimensions + get PCA model
-    # pca_start = time.perf_counter()
-    # embs_reduced, pca_model = reduce_dimensions(embs_full, target_dim=512)
-    # print(f"⚡ PCA took {time.perf_counter() - pca_start:.2f} seconds")
-    
-# Build inverted keyword index
-    inv_index = build_inverted_index(chunks)
+    print("\n🟢 [handle_queries] Starting query handling")
+    print(f"🔍 Total queries received: {len(queries)}")
+    for i, q in enumerate(queries, start=1):
+        print(f"  {i}. {q}")
+    print(f"🧩 Total document chunks available: {len(chunks)}")
 
     timings = {}
-    # 3.1 Batch‑embed + PCA
-    t0 = time.time()
-    q_raw = embed_cohere(queries)                       # (N, D)
-    # q_red = pca_model.transform(q_raw)     
-    q_red = q_raw            
-    timings['embed+PCA'] = time.time() - t0
 
-    # 3.2 Parallel retrieval of top_k chunks
+    # 1. Embed chunks using Voyage
+    texts = [chunk['text'] for chunk in chunks]
+    t0 = time.time()
+    embs_full = embed_voyage(texts, model="embed-english-v3.0", batch_size=96)
+    timings['chunk_embedding'] = time.time() - t0
+    print(f"🧠 Embedded {len(texts)} chunks in {timings['chunk_embedding']:.3f} sec")
+
+    # 2. Build inverted keyword index
+    inv_index = build_inverted_index(chunks)
+
+    # 3. Embed queries
+    t1 = time.time()
+    q_raw = embed_voyage(queries)
+    q_red = q_raw  # no PCA currently
+    timings['query_embedding'] = time.time() - t1
+    print(f"📨 Embedded {len(queries)} queries in {timings['query_embedding']:.3f} sec")
+
+    # 4. Parallel retrieval of top_k chunks per query
     def retrieve_one(i):
         qv = q_red[i].astype("float32")
         cands = filter_candidates(inv_index, queries[i], len(chunks))
         _, idxs = search_masked_subset(qv, cands, embs_full, top_k)
         return [chunks[j] for j in idxs]
 
-    t1 = time.time()
+    t2 = time.time()
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=8) as exe:
         top_k_chunks = list(exe.map(retrieve_one, range(len(queries))))
-    timings['retrieval'] = time.time() - t1
+    timings['retrieval'] = time.time() - t2
+    print(f"🔎 Retrieved top {top_k} chunks for each query in {timings['retrieval']:.3f} sec")
 
-    # 3.3 Build batch prompt
+    # 5. Build prompt
     system, user_prompt = build_batch_prompt(queries, top_k_chunks)
-    timings['prompt_build'] = 0  # negligible
+    timings['prompt_build'] = 0.0  # negligible
+    print("📜 Built batch prompt for Gemini")
 
-    # 3.4 Single Gemini LLM call
-    t2 = time.time()
+    # 6. LLM call (Gemini)
+    t3 = time.time()
     answers = batch_llm_answer(system, user_prompt, max_output_tokens=len(queries)*200)
-    timings['LLM'] = time.time() - t2
+    timings['LLM'] = time.time() - t3
+    print(f"🤖 Gemini answered all queries in {timings['LLM']:.3f} sec")
 
-    # 3.5 Print timing report
+    # 7. Summary log
+    print("\n📊 Final Timing Breakdown:")
+    for k, v in timings.items():
+        print(f"  {k:17s}: {v:.3f} sec")
     total = sum(timings.values())
-    print("⏱ Timing Breakdown:")
-    for k,v in timings.items():
-        print(f"  {k:12s}: {v:.3f} sec")
-    print(f"  {'TOTAL':12s}: {total:.3f} sec\n")
+    print(f"  {'TOTAL':17s}: {total:.3f} sec\n")
 
     return answers
+
 
 """# TESTING CODE"""
 
