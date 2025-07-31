@@ -350,7 +350,7 @@ from typing import List
 #         embeddings.extend(resp.embeddings)
 
 #     return np.array(embeddings, dtype='float32')
-def embed_voyage(texts: List[str], model: str = "voyage-3.5", batch_size=300) -> np.ndarray:
+def embed_voyage(texts: List[str], model: str = "voyage-3.5", batch_size=96) -> np.ndarray:
     """
     Embed texts using Voyage AI embeddings API.
     Returns: (N, D) array of embeddings.
@@ -668,7 +668,7 @@ def handle_queries(
         texts = [chunk['text'] for chunk in chunks]
         # Embed the chunks using Cohere
         #embs_full = embed_cohere(texts, model="embed-english-v3.0", batch_size=96)
-        embs_full = embed_voyage(texts, model="voyage-3.5", batch_size=300)
+        embs_full = embed_voyage(texts, model="voyage-3.5", batch_size=96)
 
         # Save the numpy array to the cache file.
         np.save(embedding_cache_path, embs_full)
