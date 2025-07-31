@@ -581,7 +581,7 @@ def extract_chunks_from_any_file(file_url: str):
         List[Dict]: List of clause-aware hybrid chunks.
     """
     start_total = time.time()
-    __________________________________________________________________
+    #__________________________________________________________________
     # 1. Generate a unique ID for the document to use as a cache key.
     doc_id = get_doc_id(file_url)
     chunk_cache_path = CACHE_DIR / f"chunks_{doc_id}.pkl"
@@ -591,8 +591,8 @@ def extract_chunks_from_any_file(file_url: str):
         with open(chunk_cache_path, "rb") as f:
             chunks = pickle.load(f)
         print(f"🕒 Total Time (from cache): {time.time() - start_total:.2f} seconds")
-        
-    ___________________________________________________________________
+        return chunks, doc_id
+    #___________________________________________________________________
 
     # Step 1: Download the file
     start = time.time()
