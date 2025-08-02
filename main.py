@@ -16,7 +16,7 @@ from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
 
 # Import your RAG pipeline functions
-from rag_pipeline2 import extract_chunks_from_any_file, handle_queries
+from rag_pipeline import extract_chunks_from_any_file, handle_queries
 
 # Load environment variables
 
