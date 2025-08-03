@@ -228,7 +228,11 @@ async def run_rag_system(request_data: HackathonRequest, _: None = Depends(verif
 
         # (no manual eviction needed; DocumentCache enforces capacity)
 
-        return HackathonResponse(answers=answers, processing_time=round(total_time, 3), document_id=doc_id)
+        return HackathonResponse(
+    answers=answers,
+    processing_time=round(total_time, 3),
+    document_id=doc_id
+)
 
     except Exception as e:
         logger.error(f"❌ Error: {e}")

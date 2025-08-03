@@ -563,7 +563,20 @@ def create_chunk(section: Dict, text: str, chunk_index: int, keywords: List[str]
         "raw_text": text
     }
 
-def load_or_create_cache(url: str, sections: List[Dict], doc_type: str) -> (List[Dict], np.ndarray):
+def load_or_create_cache(url: str, raw_text: str, doc_type: str) -> Tuple[List[Dict], np.ndarray, str]:
+    """
+    Loads or creates chunk and embedding cache for a given document URL and text.
+
+    Parameters:
+    - url: the original document URL
+    - raw_text: full cleaned text of the document
+    - doc_type: type of document (e.g. legal, technical, general)
+
+    Returns:
+    - chunks: list of dicts with chunked text and metadata
+    - embeddings: numpy array of chunk embeddings
+    - doc_id: unique SHA-based ID for the document
+    """
     doc_id = get_doc_id(url)
     chunks_path = CACHE_DIR / f"{doc_id}_chunks.pkl"
     embeddings_path = CACHE_DIR / f"{doc_id}_embeddings.npy"
@@ -574,18 +587,27 @@ def load_or_create_cache(url: str, sections: List[Dict], doc_type: str) -> (List
         embeddings = np.load(embeddings_path)
     else:
         print(f"⚡ Creating new chunks and embeddings for {url}")
+
+        # Extract structured sections using heading-aware logic
+        from rag_pipeline import extract_structured_sections
+        sections = extract_structured_sections(raw_text, doc_type)
+
+        # Hybrid chunking using section headers + token splitting
         chunks = universal_hybrid_chunking(sections, doc_type=doc_type)
-        # Add doc_id to all chunks
+
+        # Attach document ID to each chunk
         for c in chunks:
             c["doc_id"] = doc_id
 
+        # Embed each chunk
         embeddings = embed_voyage([c["text"] for c in chunks])
 
-        # Save cache
+        # Save to disk
         pickle.dump(chunks, open(chunks_path, "wb"))
         np.save(embeddings_path, embeddings)
 
     return chunks, embeddings, doc_id
+
 
 
 
@@ -924,6 +946,9 @@ def advanced_universal_retrieval(
 
     # Method 1: Keyword-based candidates (filtered by doc_id)
     keyword_candidates = filter_universal_candidates(inv_index, query, chunks, doc_id)
+    # score keyword overlap
+    keyword_scores = {i: 1.0 for i in keyword_candidates}
+
     candidates_sets.append(set(keyword_candidates))
 
     # Method 2: Semantic similarity candidates (filtered by doc_id)
@@ -1106,6 +1131,9 @@ def calculate_universal_scores(
     title_overlap = len(set(query_lower.split()).intersection(set(section_title.split())))
     scores['section_relevance'] = title_overlap / len(query_lower.split()) if query_lower.split() else 0
 
+# weight it higher
+    scores['final'] = 0.7 * scores['semantic'] + 0.3 * scores['keyword']
+
     # 4. Content density (important terms per unit text)
     important_terms = len(re.findall(r'\b(?:\d+|[A-Z]{2,})\b', chunk_text))
     text_length = len(chunk_text.split())
@@ -1124,6 +1152,11 @@ def calculate_universal_scores(
 
     # 7. Document type specific scoring
     scores['type_specific'] = calculate_type_specific_score(query, chunk, doc_type)
+
+    scores['final'] = (
+        0.7 * scores['semantic']
+      + 0.3 * scores['keyword']
+    )
 
     return scores
 
@@ -2490,33 +2523,91 @@ def load_or_create_chunks(file_url: str) -> Tuple[List[Dict], np.ndarray, str, s
     return chunks, embeddings, doc_id, doc_type
 
 
-def handle_queries(queries: List[str], chunks: List[Dict], chunk_embeddings: np.ndarray, inv_index: Dict, doc_type: str, doc_id: str, top_k: int = 6) -> List[str]:
+
+from concurrent.futures import ThreadPoolExecutor
+from typing import List, Dict
+import numpy as np
+
+# Assume embed_voyage, advanced_universal_retrieval,
+# build_universal_prompt, batch_llm_answer,
+# calculate_universal_confidence are already imported above
+
+
+def _process_single_query(
+    query: str,
+    chunks: List[Dict],
+    chunk_embeddings: np.ndarray,
+    inv_index: Dict,
+    doc_type: str,
+    doc_id: str,
+    top_k: int
+) -> str:
     """
-    Handles multiple queries using advanced retrieval and reranking.
-    Ensures doc_id isolation for accuracy.
+    Process a single query: embed, retrieve, compute confidence,
+    and call the LLM only if confidence is sufficient.
     """
-    results = []
-    for i, query in enumerate(queries):
-        print(f"\n🔍 Query {i+1}/{len(queries)}: {query}")
+    # Embed query
+    query_embedding = embed_voyage([query])[0]
 
-        # Embed query
-        query_embedding = embed_voyage([query])[0]
+    # Retrieve top chunks
+    retrieved_chunks = advanced_universal_retrieval(
+        query_embedding,
+        chunks,
+        chunk_embeddings,
+        inv_index,
+        query,
+        doc_type,
+        doc_id,
+        initial_k=20,
+        final_k=top_k
+    )
 
-        # Retrieve chunks
-        retrieved_chunks = advanced_universal_retrieval(
-            query_embedding, chunks, chunk_embeddings, inv_index, query, doc_type, doc_id, initial_k=20, final_k=top_k
-        )
+    # Compute confidence
+    confidence = calculate_universal_confidence(query, retrieved_chunks, doc_type)
 
-        # Debug: Show retrieved sections
-        for rank, chunk in enumerate(retrieved_chunks, 1):
-            print(f"   Top {rank}: {chunk['section_id']} → {chunk['text'][:80]}...")
+    # Early-exit on low confidence
+    if confidence < 0.25:
+        return "Insufficient information to answer this question."
 
-        # Build prompt and get LLM answer
-        system, user_prompt = build_universal_prompt([query], [retrieved_chunks], [1.0], doc_type)
-        answer = batch_llm_answer(system, user_prompt, max_output_tokens=2000)[0]
-        results.append(answer)
+    # Build prompt and fetch answer
+    system, user_prompt = build_universal_prompt([query], [retrieved_chunks], [confidence], doc_type)
+    answer = batch_llm_answer(system, user_prompt, max_output_tokens=2000)[0]
+    return answer
+
+
+def handle_queries(
+    queries: List[str],
+    chunks: List[Dict],
+    chunk_embeddings: np.ndarray,
+    inv_index: Dict,
+    doc_type: str,
+    doc_id: str,
+    top_k: int = 6
+) -> List[str]:
+    """
+    Handles multiple queries in parallel using advanced retrieval and reranking.
+    """
+    # Parallel execution across queries (up to 8 threads)
+    max_workers = min(len(queries), 8)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                _process_single_query,
+                query,
+                chunks,
+                chunk_embeddings,
+                inv_index,
+                doc_type,
+                doc_id,
+                top_k
+            )
+            for query in queries
+        ]
+        results = [f.result() for f in futures]
 
     return results
+
+
 
 def advanced_universal_retrieval(
     query_embedding: np.ndarray,
@@ -2558,17 +2649,22 @@ def advanced_universal_retrieval(
             query, chunk, query_embedding, chunk_embeddings[final_candidates[i]], doc_type
         )
 
-        final_score = (
-            0.25 * score_components['semantic'] +
-            0.20 * score_components['keyword'] +
-            0.15 * score_components['section_relevance'] +
-            0.15 * score_components['content_density'] +
-            0.10 * score_components['position'] +
-            0.10 * score_components['length'] +
-            0.05 * score_components['type_specific']
-        )
+        # final_score = (
+        #     0.25 * score_components['semantic'] +
+        #     0.20 * score_components['keyword'] +
+        #     0.15 * score_components['section_relevance'] +
+        #     0.15 * score_components['content_density'] +
+        #     0.10 * score_components['position'] +
+        #     0.10 * score_components['length'] +
+        #     0.05 * score_components['type_specific']
+        # )
 
-        scores.append((final_score, i))
+        # scores.append((final_score, i))
+
+        for i, chunk in enumerate(candidate_chunks):
+            sc = calculate_universal_scores(...)
+            scores.append((sc['final'], i))
+
 
     scores.sort(reverse=True)
     return [candidate_chunks[i] for _, i in scores[:final_k]]
