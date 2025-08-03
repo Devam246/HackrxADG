@@ -48,8 +48,6 @@ load_dotenv()  # ✅ Loads .env variables into os.environ
 """# Step 1 - Data PreProcessing and Chunking"""
 
 
-
-
 # Initialize spaCy for sentence splitting (optional)
 nlp = spacy.load("en_core_web_sm")
 
@@ -553,10 +551,10 @@ def chunk_by_tokens(section: Dict, max_tokens: int, overlap_tokens: int) -> List
 
     return chunks
 
-def create_chunk(section: Dict, text: str, chunk_index: int, keywords: List[str]) -> Dict:
+def create_chunk(section: Dict, text: str, chunk_index: int, keywords: List[str], doc_id: str) -> Dict:
     """Create standardized chunk object"""
-
     return {
+        "doc_id": section.get("doc_id"),
         "text": f"{section['section_id']} {section['section_title']}\n{text}",
         "section_id": section["section_id"],
         "section_title": section["section_title"],
@@ -564,6 +562,32 @@ def create_chunk(section: Dict, text: str, chunk_index: int, keywords: List[str]
         "keywords": keywords,
         "raw_text": text
     }
+
+def load_or_create_cache(url: str, sections: List[Dict], doc_type: str) -> (List[Dict], np.ndarray):
+    doc_id = get_doc_id(url)
+    chunks_path = CACHE_DIR / f"{doc_id}_chunks.pkl"
+    embeddings_path = CACHE_DIR / f"{doc_id}_embeddings.npy"
+
+    if chunks_path.exists() and embeddings_path.exists():
+        print(f"✅ Using cached chunks and embeddings for {url}")
+        chunks = pickle.load(open(chunks_path, "rb"))
+        embeddings = np.load(embeddings_path)
+    else:
+        print(f"⚡ Creating new chunks and embeddings for {url}")
+        chunks = universal_hybrid_chunking(sections, doc_type=doc_type)
+        # Add doc_id to all chunks
+        for c in chunks:
+            c["doc_id"] = doc_id
+
+        embeddings = embed_voyage([c["text"] for c in chunks])
+
+        # Save cache
+        pickle.dump(chunks, open(chunks_path, "wb"))
+        np.save(embeddings_path, embeddings)
+
+    return chunks, embeddings, doc_id
+
+
 
 def get_last_n_tokens(text: str, n: int) -> str:
     """Get last n tokens from text"""
@@ -889,30 +913,34 @@ def advanced_universal_retrieval(
     inv_index: Dict,
     query: str,
     doc_type: str,
+    doc_id: str,   # ✅ Added parameter
     initial_k: int = 20,
     final_k: int = 6
 ) -> List[Dict]:
-    """Advanced retrieval system that adapts to any document type"""
+    """Advanced retrieval system that adapts to any document type with doc isolation"""
 
     # Stage 1: Multi-method candidate generation
     candidates_sets = []
 
-    # Method 1: Keyword-based candidates
-    keyword_candidates = filter_universal_candidates(inv_index, query, len(chunks))
+    # Method 1: Keyword-based candidates (filtered by doc_id)
+    keyword_candidates = filter_universal_candidates(inv_index, query, chunks, doc_id)
     candidates_sets.append(set(keyword_candidates))
 
-    # Method 2: Semantic similarity candidates (broader search)
-    semantic_candidates = get_semantic_candidates(
-        query_embedding, chunk_embeddings, initial_k * 2
-    )
+    # Method 2: Semantic similarity candidates (filtered by doc_id)
+    semantic_candidates_all = get_semantic_candidates(query_embedding, chunk_embeddings, initial_k * 4)
+    semantic_candidates = [i for i in semantic_candidates_all if chunks[i]['doc_id'] == doc_id]
     candidates_sets.append(set(semantic_candidates))
 
-    # Method 3: Section-based candidates (same document sections)
-    section_candidates = get_section_based_candidates(query, chunks, doc_type)
+    # Method 3: Section-based candidates (filtered by doc_id)
+    section_candidates_all = get_section_based_candidates(query, chunks, doc_type)
+    section_candidates = [i for i in section_candidates_all if chunks[i]['doc_id'] == doc_id]
     candidates_sets.append(set(section_candidates))
 
     # Combine candidates using ensemble approach
     final_candidates = ensemble_candidate_selection(candidates_sets, initial_k)
+
+    # Filter final candidates by doc_id (extra safety)
+    final_candidates = [i for i in final_candidates if chunks[i]['doc_id'] == doc_id]
 
     # Stage 2: Advanced reranking with multiple signals
     candidate_chunks = [chunks[i] for i in final_candidates]
@@ -937,40 +965,67 @@ def advanced_universal_retrieval(
 
         scores.append((final_score, i))
 
-    # Return top-k after reranking
+    # Sort and return top-k chunks
     scores.sort(reverse=True)
     return [candidate_chunks[i] for _, i in scores[:final_k]]
 
-def filter_universal_candidates(inv_index: Dict, query: str, total: int) -> List[int]:
-    """Universal keyword filtering that works for any domain"""
+from typing import List, Set, Dict
+import re
 
-    # Extract query keywords with universal approach
-    query_words = set(re.findall(r'\b\w{3,}\b', query.lower()))
+def filter_universal_candidates(
+    inv_index: Dict[str, Set[int]],
+    query: str,
+    chunks: List[Dict],
+    doc_id: str
+) -> List[int]:
+    """
+    Universal keyword filtering scoped to the current doc_id.
+    1) Pre-filter to this doc’s chunk indices.
+    2) Find keyword matches only among those indices.
+    3) Fallback always stays within the same doc.
+    """
+    # 1) All indices for this document
+    doc_indices = {i for i, c in enumerate(chunks) if c.get('doc_id') == doc_id}
+    if not doc_indices:
+        return []
 
-    # Also extract numbers, special terms
-    numbers = set(re.findall(r'\b\d+\b', query))
-    special_terms = set(re.findall(r'\b(?:section|article|chapter|part|clause)\s+\w+\b', query.lower()))
+    # 2) Extract search terms
+    query_words   = set(re.findall(r'\b\w{3,}\b', query.lower()))
+    numbers       = set(re.findall(r'\b\d+\b', query))
+    special_terms = set(
+        re.findall(r'\b(?:section|article|chapter|part|clause)\s+\w+\b', query.lower())
+    )
+    all_terms = query_words | numbers | special_terms
 
-    all_terms = query_words.union(numbers).union(special_terms)
-
-    matched_sets = []
+    # 3) Build matched sets per term, restricted to this doc
+    matched_sets: List[Set[int]] = []
     for term in all_terms:
         if term in inv_index:
-            matched_sets.append(inv_index[term])
+            hits = inv_index[term] & doc_indices
+            if hits:
+                matched_sets.append(hits)
 
+    # 4) If no term matched, return first 50 chunks of this doc
     if not matched_sets:
-        return list(range(min(total, 50)))  # Fallback to first 50
+        return list(doc_indices)[:50]
 
-    # Start with intersection, expand if needed
-    candidates = set.intersection(*matched_sets) if len(matched_sets) > 1 else matched_sets[0]
+    # 5) Intersection first, else union
+    if len(matched_sets) > 1:
+        candidates = set.intersection(*matched_sets)
+    else:
+        candidates = matched_sets[0]
 
     if len(candidates) < 10:
         candidates = set.union(*matched_sets)
 
+    # 6) If still too few, fall back to all doc chunks
     if len(candidates) < 5:
-        candidates = set(range(min(total, 30)))
+        candidates = doc_indices
 
     return list(candidates)
+
+
+
 
 def get_semantic_candidates(query_emb: np.ndarray, chunk_embeddings: np.ndarray, k: int) -> List[int]:
     """Get candidates based on semantic similarity"""
@@ -1388,11 +1443,11 @@ def calculate_universal_confidence(
     retrieved_chunks: List[Dict],
     doc_type: str
 ) -> float:
-    """Calculate confidence score that works for any document type"""
+    """Calculate normalized confidence score for any document type"""
 
     confidence_signals = []
 
-    # 1. Query-chunk keyword overlap
+    # 1. Keyword Overlap
     query_words = set(re.findall(r'\b\w{3,}\b', query.lower()))
     all_chunk_words = set()
     for chunk in retrieved_chunks:
@@ -1401,40 +1456,42 @@ def calculate_universal_confidence(
 
     if query_words:
         overlap_score = len(query_words.intersection(all_chunk_words)) / len(query_words)
-        confidence_signals.append(overlap_score)
+        confidence_signals.append(min(overlap_score, 1.0))
+    else:
+        confidence_signals.append(0.0)
 
-    # 2. Content specificity (presence of numbers, specific terms)
+    # 2. Content Specificity
     specificity_score = 0.0
     for chunk in retrieved_chunks:
         text = chunk['text']
-        # Numbers, dates, specific identifiers
         specifics = len(re.findall(r'\b\d+\b|\b[A-Z]{2,}\d+\b|\b\d{4}-\d{2}-\d{2}\b', text))
         specificity_score += min(specifics / 100.0, 0.3)
 
     confidence_signals.append(min(specificity_score, 1.0))
 
-    # 3. Section title relevance
+    # 3. Section Title Relevance
     title_relevance = 0.0
+    query_words_title = set(query.lower().split())
     for chunk in retrieved_chunks:
-        title = chunk.get('section_title', '').lower()
-        query_lower = query.lower()
-        title_words = set(title.split())
-        query_words_title = set(query_lower.split())
+        title_words = set(chunk.get('section_title', '').lower().split())
         if query_words_title:
-            title_overlap = len(title_words.intersection(query_words_title)) / len(query_words_title)
-            title_relevance = max(title_relevance, title_overlap)
+            overlap = len(title_words.intersection(query_words_title)) / len(query_words_title)
+            title_relevance = max(title_relevance, overlap)
 
-    confidence_signals.append(title_relevance)
+    confidence_signals.append(min(title_relevance, 1.0))
 
-    # 4. Document type specific confidence
+    # 4. Document Type Specific Confidence
     type_confidence = calculate_type_specific_confidence(query, retrieved_chunks, doc_type)
-    confidence_signals.append(type_confidence)
+    confidence_signals.append(min(type_confidence, 1.0))
 
-    # 5. Chunk consistency (similar chunks suggest good retrieval)
+    # 5. Chunk Consistency
     consistency_score = calculate_chunk_consistency(retrieved_chunks)
-    confidence_signals.append(consistency_score)
+    confidence_signals.append(min(consistency_score, 1.0))
 
-    return sum(confidence_signals) / len(confidence_signals)
+    # ✅ Clamp the final average to [0, 1]
+    avg_confidence = sum(confidence_signals) / len(confidence_signals)
+    return min(max(avg_confidence, 0.0), 1.0)
+
 
 def calculate_type_specific_confidence(query: str, chunks: List[Dict], doc_type: str) -> float:
     """Calculate document type specific confidence"""
@@ -1547,93 +1604,6 @@ def build_batch_prompt(
     user = "\n".join(lines) + "\nRespond with JSON:"
 
     return system, user
-
-# # ============================================
-# # 9. UNIVERSAL PROMPT ENGINEERING
-# # ============================================
-
-# def build_universal_prompt(
-#     queries: List[str],
-#     top_chunks: List[List[Dict]],
-#     confidence_scores: List[float],
-#     doc_type: str,
-#     snippet_len: int = 600
-# ) -> Tuple[str, str]:
-#     """Build prompts that work optimally for any document type"""
-
-#     # Document type specific instructions
-#     type_instructions = {
-#         'legal': (
-#             "You are analyzing legal documents. Provide precise answers with exact article/section references. "
-#             "Include specific legal provisions, rights, duties, and procedures. "
-#             "When citing provisions, use exact numbering (e.g., 'Article 19(1)(a)')."
-#         ),
-#         'insurance': (
-#             "You are analyzing insurance policy documents. Provide detailed answers with specific terms, "
-#             "conditions, waiting periods, coverage limits, and exclusions. "
-#             "Include exact timeframes (days/months/years) and monetary amounts where applicable."
-#         ),
-#         'technical': (
-#             "You are analyzing technical documentation. Provide precise answers with specific part numbers, "
-#             "procedures, specifications, and safety requirements. "
-#             "Include step-by-step processes and exact technical parameters."
-#         ),
-#         'academic': (
-#             "You are analyzing academic/scientific content. Provide comprehensive answers with definitions, "
-#             "principles, formulas, and supporting evidence. "
-#             "Include mathematical expressions and cite specific theorems or principles."
-#         ),
-#         'general': (
-#             "You are analyzing document content. Provide accurate, detailed answers based on the provided text. "
-#             "Include specific facts, numbers, and relevant details from the source material."
-#         )
-#     }
-
-#     type_instruction = type_instructions.get(doc_type, type_instructions['general'])
-
-#     system = f"""You are an expert document analyst specializing in {doc_type} documents.
-
-# {type_instruction}
-
-# RESPONSE REQUIREMENTS:
-# - Provide COMPLETE, DETAILED answers with SPECIFIC information
-# - Include exact numbers, dates, references, and conditions
-# - Use information ONLY from the provided document sections
-# - If information is incomplete, clearly state what is available
-# - For high confidence queries: Provide comprehensive details
-# - For medium confidence queries: Provide available information with caveats
-# - For low confidence queries: Give best available answer and note limitations
-
-# OUTPUT FORMAT: Return ONLY a JSON object:
-# {{
-#   "answers": ["detailed_answer_1", "detailed_answer_2", ...]
-# }}
-# Do not wrap your output in markdown, triple backticks, or any code block. Return only raw JSON.\n"""
-
-#     lines = []
-#     for i, (query, chunks, conf) in enumerate(zip(queries, top_chunks, confidence_scores), 1):
-#         confidence_level = "HIGH" if conf > 0.7 else "MEDIUM" if conf > 0.5 else "LOW"
-
-#         lines.append(f"\n{i}) QUERY: {query}")
-#         lines.append(f"CONFIDENCE: {confidence_level}")
-#         lines.append("RELEVANT DOCUMENT SECTIONS:")
-
-#         for j, chunk in enumerate(chunks, 1):
-#             section_info = f"Section {chunk['section_id']}: {chunk.get('section_title', 'N/A')}"
-#             snippet = chunk["text"][:snippet_len].replace('\n', ' ')
-
-#             lines.append(f"\n[{j}] {section_info}")
-#             lines.append(f"Content: {snippet}")
-
-#             # Add context information if available
-#             if chunk.get('context_count', 0) > 0:
-#                 lines.append(f"(Includes {chunk['context_count']} related sections)")
-
-#         lines.append("\n" + "="*50)
-
-#     user = "\n".join(lines) + "\n\nProvide detailed JSON response:"
-
-#     return system, user
 
 def build_universal_prompt(
     queries: List[str],
@@ -2456,19 +2426,19 @@ def extract_phrases(text: str) -> List[str]:
 
 """# Step 4 Execution Code"""
 
-# ============================================
-# 10. MAIN UNIVERSAL PIPELINE
-# ============================================
+# Global variable to store document type
+CURRENT_DOC_TYPE = 'general' 
 
-def universal_extract_chunks_from_file(file_url: str) -> Tuple[List[Dict], str]:
-    """Universal file processing that detects document type and adapts processing"""
-
+def load_or_create_chunks(file_url: str) -> Tuple[List[Dict], np.ndarray, str, str]:
+    """
+    Loads cached chunks & embeddings for a document or creates them if not cached.
+    Returns: chunks, embeddings, doc_id, doc_type
+    """
     print("🌍 [Universal RAG] Starting document processing")
     start_total = time.time()
 
     # Step 1: Download and extract text
     local_path, file_ext = download_file(file_url)
-
     if file_ext == "pdf":
         raw_text = extract_text_from_pdf(local_path)
     elif file_ext == "docx":
@@ -2480,255 +2450,125 @@ def universal_extract_chunks_from_file(file_url: str) -> Tuple[List[Dict], str]:
 
     print(f"✅ Text extracted: {len(raw_text)} characters")
 
-    # Step 2: Clean text
+    # Clean text
     cleaned_text = clean_text(raw_text)
 
-    # Step 3: Detect document type
-    doc_type = DocumentClassifier.classify_document(cleaned_text[:5000])  # Sample first 5000 chars
+    # Detect document type
+    doc_type = DocumentClassifier.classify_document(cleaned_text[:5000])
     print(f"🎯 Document type detected: {doc_type.upper()}")
 
-    # Step 4: Extract sections based on document type
-    sections = extract_structured_sections(cleaned_text, doc_type)
-    print(f"📄 Sections extracted: {len(sections)}")
+    # Generate doc_id and cache paths
+    doc_id = get_doc_id(file_url)
+    chunks_path = CACHE_DIR / f"{doc_id}_chunks.pkl"
+    embeddings_path = CACHE_DIR / f"{doc_id}_embeddings.npy"
 
-    # Step 5: Universal hybrid chunking
-    chunks = universal_hybrid_chunking(sections, max_tokens=600, overlap_tokens=150, doc_type=doc_type)
-    print(f"🧩 Chunks created: {len(chunks)}")
+    if chunks_path.exists() and embeddings_path.exists():
+        print(f"✅ Using cached chunks and embeddings for {file_url}")
+        chunks = pickle.load(open(chunks_path, "rb"))
+        embeddings = np.load(embeddings_path)
+    else:
+        print(f"⚡ Creating new chunks and embeddings for {file_url}")
+        # Extract structured sections and chunk
+        sections = extract_structured_sections(cleaned_text, doc_type)
+        print(f"📄 Sections extracted: {len(sections)}")
+
+        chunks = universal_hybrid_chunking(sections, max_tokens=600, overlap_tokens=150, doc_type=doc_type)
+
+        # Add doc_id to chunks
+        for c in chunks:
+            c["doc_id"] = doc_id
+            if 'keywords' not in c:
+                c['keywords'] = extract_universal_keywords(c.get('raw_text', c['text']))
+
+        print(f"🧩 Chunks created: {len(chunks)}")
+
+        embeddings = embed_voyage([c["text"] for c in chunks])
+        pickle.dump(chunks, open(chunks_path, "wb"))
+        np.save(embeddings_path, embeddings)
 
     print(f"⏱️ Total processing time: {time.time() - start_total:.2f} seconds")
+    return chunks, embeddings, doc_id, doc_type
 
-    return chunks, doc_type
 
-def build_enhanced_inverted_index(chunks: List[Dict]) -> Dict[str, Set[int]]:
-    """Build inverted index with enhanced keyword extraction"""
-    inv_index = defaultdict(set)
-
-    for i, chunk in enumerate(chunks):
-        # Extract from header
-        header = chunk.get('header', '')
-        header_keywords = re.findall(r'\b\w{3,}\b', header.lower())
-
-        # Extract from content with themes
-        content_keywords = chunk.get('keywords', [])
-
-        # Extract numbers and special terms
-        text = chunk['text']
-        numbers = re.findall(r'\b\d+\b', text)
-        special_terms = re.findall(r'\b(?:waiting|grace|premium|coverage|claim)\w*\b', text.lower())
-
-        # Add all keywords to index
-        all_keywords = header_keywords + content_keywords + numbers + special_terms
-        for keyword in all_keywords:
-            inv_index[keyword.lower()].add(i)
-
-    return dict(inv_index)
-
-def calculate_optimized_confidence(query_processed: Dict, chunks: List[Dict]) -> float:
-    """Enhanced confidence calculation"""
-    signals = []
-
-    # Entity match confidence
-    entities = query_processed['entities']
-    total_entities = sum(len(elist) for elist in entities.values())
-    matched_entities = 0
-
-    for chunk in chunks:
-        text = chunk['text'].lower()
-        for entity_list in entities.values():
-            for entity in entity_list:
-                if entity.lower() in text:
-                    matched_entities += 1
-
-    entity_conf = matched_entities / max(total_entities, 1)
-    signals.append(entity_conf)
-
-    # Intent alignment confidence
-    intent = query_processed['intent']
-    intent_scores = [calculate_intent_alignment(intent, chunk['text']) for chunk in chunks]
-    signals.append(np.mean(intent_scores))
-
-    # Header relevance confidence
-    query_words = set(query_processed['original'].lower().split())
-    header_scores = []
-    for chunk in chunks:
-        header = chunk.get('header', '').lower()
-        header_words = set(header.split())
-        overlap = len(query_words.intersection(header_words)) / len(query_words) if query_words else 0
-        header_scores.append(overlap)
-    signals.append(np.mean(header_scores))
-
-    return np.mean(signals)
-
-def optimized_universal_handle_queries(
-    queries: List[str],
-    chunks: List[Dict],
-    doc_type: str,
-    top_k: int = 6
-) -> List[str]:
+def handle_queries(queries: List[str], chunks: List[Dict], chunk_embeddings: np.ndarray, inv_index: Dict, doc_type: str, doc_id: str, top_k: int = 6) -> List[str]:
     """
-    Optimized pipeline focusing on accuracy improvements with comprehensive logging
+    Handles multiple queries using advanced retrieval and reranking.
+    Ensures doc_id isolation for accuracy.
     """
-    import time
-    from datetime import datetime
-
-    def log_with_time(message: str, step_start_time: float = None):
-        """Helper function to log messages with timestamps"""
-        current_time = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        if step_start_time:
-            elapsed = time.time() - step_start_time
-            print(f"[{current_time}] {message} ⏱️ ({elapsed:.3f}s)")
-        else:
-            print(f"[{current_time}] {message}")
-
-    # Main pipeline start
-    pipeline_start = time.time()
-    log_with_time(f"🚀 [Optimized RAG] Starting pipeline with {len(queries)} queries, {len(chunks)} chunks")
-
-    # Step 1: Add contextual headers
-    step_start = time.time()
-    log_with_time("📝 Step 1: Adding contextual headers...")
-    enhanced_chunks = add_contextual_headers(chunks, doc_type)
-    log_with_time(f"✅ Step 1: Contextual headers added to {len(enhanced_chunks)} chunks", step_start)
-
-    # Step 2: Embed enhanced chunks
-    step_start = time.time()
-    log_with_time("🔢 Step 2: Embedding enhanced chunks...")
-    texts = [chunk['text'] for chunk in enhanced_chunks]
-    chunk_embeddings = embed_voyage(texts)
-    log_with_time(f"✅ Step 2: Generated embeddings for {len(texts)} chunks", step_start)
-
-    # Step 3: Build enhanced inverted index
-    step_start = time.time()
-    log_with_time("🔍 Step 3: Building enhanced inverted index...")
-    inv_index = build_enhanced_inverted_index(enhanced_chunks)
-    log_with_time(f"✅ Step 3: Inverted index built with {len(inv_index)} terms", step_start)
-
-    # Initialize result containers
-    all_retrieved_chunks = []
-    confidence_scores = []
-
-    # Step 4: Process each query
-    queries_start = time.time()
-    log_with_time(f"🔄 Step 4: Processing {len(queries)} queries...")
-
+    results = []
     for i, query in enumerate(queries):
-        query_start = time.time()
-        log_with_time(f"   🔍 Query {i+1}/{len(queries)}: '{query[:50]}{'...' if len(query) > 50 else ''}'")
+        print(f"\n🔍 Query {i+1}/{len(queries)}: {query}")
 
-        # Enhanced query preprocessing
-        substep_start = time.time()
-        query_processed = enhanced_query_preprocessing(query, doc_type)
-        log_with_time(f"      ⚡ Query preprocessing completed", substep_start)
+        # Embed query
+        query_embedding = embed_voyage([query])[0]
 
-        # Smart candidate filtering
-        substep_start = time.time()
-        candidates = smart_candidate_filtering(
-            query_processed, enhanced_chunks, inv_index, max_candidates=25
+        # Retrieve chunks
+        retrieved_chunks = advanced_universal_retrieval(
+            query_embedding, chunks, chunk_embeddings, inv_index, query, doc_type, doc_id, initial_k=20, final_k=top_k
         )
-        log_with_time(f"      🎯 Found {len(candidates) if candidates else 0} candidates", substep_start)
 
-        # Embed expanded query
-        substep_start = time.time()
-        expanded_query = query_processed['expanded']
-        query_embedding = embed_voyage([expanded_query])[0]
-        log_with_time(f"      🔢 Query embedding generated", substep_start)
+        # Debug: Show retrieved sections
+        for rank, chunk in enumerate(retrieved_chunks, 1):
+            print(f"   Top {rank}: {chunk['section_id']} → {chunk['text'][:80]}...")
 
-        # Semantic search on candidates
-        substep_start = time.time()
-        if candidates:
-            candidate_embeddings = chunk_embeddings[candidates]
-            similarities = np.dot(candidate_embeddings, query_embedding)
-            top_semantic_indices = np.argsort(similarities)[::-1][:15]
-            semantic_results = [enhanced_chunks[candidates[idx]] for idx in top_semantic_indices]
-            log_with_time(f"      🎯 Semantic search on candidates completed", substep_start)
-        else:
-            # Fallback to full search
-            similarities = np.dot(chunk_embeddings, query_embedding)
-            top_indices = np.argsort(similarities)[::-1][:15]
-            semantic_results = [enhanced_chunks[idx] for idx in top_indices]
-            log_with_time(f"      🔄 Fallback to full semantic search completed", substep_start)
+        # Build prompt and get LLM answer
+        system, user_prompt = build_universal_prompt([query], [retrieved_chunks], [1.0], doc_type)
+        answer = batch_llm_answer(system, user_prompt, max_output_tokens=2000)[0]
+        results.append(answer)
 
-        # Lightweight reranking
-        substep_start = time.time()
-        final_chunks = lightweight_reranking(query_processed, semantic_results, top_k)
-        log_with_time(f"      📊 Reranking completed, selected {len(final_chunks)} chunks", substep_start)
+    return results
 
-         # 🐞 Debug: print out the top chunks for this query
-        for rank, chunk in enumerate(final_chunks, start=1):
-            snippet = chunk['text'][:100].replace("\n", " ")  # first 100 chars
-            log_with_time(f"         🔍 Top {rank}: {snippet}...")
+def advanced_universal_retrieval(
+    query_embedding: np.ndarray,
+    chunks: List[Dict],
+    chunk_embeddings: np.ndarray,
+    inv_index: Dict,
+    query: str,
+    doc_type: str,
+    doc_id: str,
+    initial_k: int = 20,
+    final_k: int = 6
+) -> List[Dict]:
+    """Advanced retrieval system with doc isolation"""
 
-        # Calculate confidence
-        substep_start = time.time()
-        confidence = calculate_optimized_confidence(query_processed, final_chunks)
-        log_with_time(f"      📈 Confidence calculated: {confidence:.3f}", substep_start)
+    candidates_sets = []
 
-        # Store results
-        all_retrieved_chunks.append(final_chunks)
-        confidence_scores.append(confidence)
+    # Method 1: Keyword-based
+    keyword_candidates = filter_universal_candidates(inv_index, query, chunks, doc_id)
+    candidates_sets.append(set(keyword_candidates))
 
-        query_elapsed = time.time() - query_start
-        log_with_time(f"   ✅ Query {i+1} completed: {len(final_chunks)} chunks, confidence: {confidence:.3f} ⏱️ ({query_elapsed:.3f}s)")
+    # Method 2: Semantic similarity
+    semantic_candidates_all = get_semantic_candidates(query_embedding, chunk_embeddings, initial_k * 4)
+    semantic_candidates = [i for i in semantic_candidates_all if chunks[i]['doc_id'] == doc_id]
+    candidates_sets.append(set(semantic_candidates))
 
-    queries_elapsed = time.time() - queries_start
-    log_with_time(f"✅ Step 4: All queries processed ⏱️ ({queries_elapsed:.3f}s)")
+    # Method 3: Section-based
+    section_candidates_all = get_section_based_candidates(query, chunks, doc_type)
+    section_candidates = [i for i in section_candidates_all if chunks[i]['doc_id'] == doc_id]
+    candidates_sets.append(set(section_candidates))
 
-    # Step 5: Generate answers
-    step_start = time.time()
-    log_with_time("🤖 Step 5: Generating LLM answers...")
+    final_candidates = ensemble_candidate_selection(candidates_sets, initial_k)
+    final_candidates = [i for i in final_candidates if chunks[i]['doc_id'] == doc_id]
 
-    system, user_prompt = build_universal_prompt(
-        queries, all_retrieved_chunks, confidence_scores, doc_type
-    )
-    log_with_time("      📝 Prompts built successfully")
+    candidate_chunks = [chunks[i] for i in final_candidates]
+    scores = []
 
-    substep_start = time.time()
-    answers = batch_llm_answer(system, user_prompt, max_output_tokens=4000)
-    log_with_time(f"      🤖 LLM answers generated for {len(answers)} queries", substep_start)
+    for i, chunk in enumerate(candidate_chunks):
+        score_components = calculate_universal_scores(
+            query, chunk, query_embedding, chunk_embeddings[final_candidates[i]], doc_type
+        )
 
-    log_with_time(f"✅ Step 5: Answer generation completed", step_start)
+        final_score = (
+            0.25 * score_components['semantic'] +
+            0.20 * score_components['keyword'] +
+            0.15 * score_components['section_relevance'] +
+            0.15 * score_components['content_density'] +
+            0.10 * score_components['position'] +
+            0.10 * score_components['length'] +
+            0.05 * score_components['type_specific']
+        )
 
-    # Pipeline completion
-    total_time = time.time() - pipeline_start
-    log_with_time(f"🎉 Optimized RAG pipeline completed successfully!")
-    log_with_time(f"📊 Final Stats:")
-    log_with_time(f"   • Total queries processed: {len(queries)}")
-    log_with_time(f"   • Total chunks processed: {len(chunks)}")
-    log_with_time(f"   • Average confidence: {np.mean(confidence_scores):.3f}")
-    log_with_time(f"   • Total execution time: {total_time:.3f}s")
-    log_with_time(f"   • Average time per query: {total_time/len(queries):.3f}s")
-    log_with_time("=" * 50)
+        scores.append((final_score, i))
 
-    return answers
-
-# ============================================
-# 6. INTEGRATION FUNCTIONS
-# ============================================
-
-def enhanced_extract_chunks_from_file(file_url: str) -> Tuple[List[Dict], str]:
-    """Enhanced version with preprocessing optimizations"""
-    chunks, doc_type = universal_extract_chunks_from_file(file_url)
-
-    # Pre-process chunks for better retrieval
-    for chunk in chunks:
-        # Ensure all chunks have enhanced keywords
-        if 'keywords' not in chunk:
-            chunk['keywords'] = extract_universal_keywords(chunk.get('raw_text', chunk['text']))
-
-    return chunks, doc_type
-
-# Drop-in replacements for your existing functions
-def extract_chunks_from_any_file(file_url: str) -> List[Dict]:
-    """Enhanced version - drop-in replacement"""
-    global CURRENT_DOC_TYPE
-    chunks, doc_type = enhanced_extract_chunks_from_file(file_url)
-    CURRENT_DOC_TYPE = doc_type
-    return chunks, get_doc_id(file_url)
-
-def handle_queries(queries: List[str], chunks: List[Dict], doc_id: str = None, top_k: int = 6) -> List[str]:
-    """Enhanced version - drop-in replacement"""
-    global CURRENT_DOC_TYPE
-    doc_type = getattr(handle_queries, 'doc_type', CURRENT_DOC_TYPE if 'CURRENT_DOC_TYPE' in globals() else 'general')
-    return optimized_universal_handle_queries(queries, chunks, doc_type, top_k)
-# Global variable to store document type
-CURRENT_DOC_TYPE = 'general' 
+    scores.sort(reverse=True)
+    return [candidate_chunks[i] for _, i in scores[:final_k]]
