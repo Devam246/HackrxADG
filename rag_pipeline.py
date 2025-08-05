@@ -9,6 +9,8 @@ import spacy
 import tiktoken
 import requests
 import fitz 
+from typing import Tuple, List, Dict
+
 # _____________________________________________________________________________
 #                        CATCHING CODE
 # Step 1: Setup and Caching Utilities
