@@ -22,7 +22,7 @@ from rag_pipeline import (
     build_enhanced_inverted_index
 )
 
-# Load environment variables
+# Load environment variables from .env
 load_dotenv()
 
 # Configure logging
