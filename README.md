@@ -232,7 +232,7 @@ Unit tests: `pytest` included in repo. Integration tests mock the LLM and vector
 
 ## Contact
 
-Maintainer: Your name — `dev.amkharbanda246@gmail.com`
+Maintainers: Your name — `dev.amkharbanda246@gmail.com`,`anshul2812modi@gmail.com`
 
 ---
 
