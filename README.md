@@ -1,4 +1,4 @@
-# RAG Insurance Decisioning — READM
+# RAG Insurance Decisioning — README
 
 **Project:** RAG-based Insurance Decisioning System
 
