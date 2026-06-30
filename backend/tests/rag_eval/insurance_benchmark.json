@@ -1,0 +1,122 @@
+[
+  {
+    "input": "What is the waiting period for cataract surgery?",
+    "expected_output": "Cataract surgery is excluded during the first 24 months of coverage under the policy.",
+    "retrieval_context": [
+      "3.1 Cataract surgery is excluded during the first 24 months of coverage.",
+      "3.2 Other ophthalmology procedures require a 12-month waiting period."
+    ]
+  },
+  {
+    "input": "Is maternity covered under the policy?",
+    "expected_output": "Maternity expenses are covered after a waiting period of 9 months. Normal delivery is covered up to INR 25,000 and Caesarean up to INR 50,000.",
+    "retrieval_context": [
+      "3.2 Maternity expenses are covered after a waiting period of 9 months.",
+      "Normal delivery: up to INR 25,000. Caesarean: up to INR 50,000."
+    ]
+  },
+  {
+    "input": "What is the grace period for premium payment?",
+    "expected_output": "A grace period of 30 days is provided for premium payment after the due date. Coverage continues during the grace period.",
+    "retrieval_context": [
+      "Section 5.1: A grace period of 30 days is allowed for renewal premium payments.",
+      "During the grace period, the policy shall remain in force."
+    ]
+  },
+  {
+    "input": "Are pre-existing diseases covered?",
+    "expected_output": "Pre-existing diseases are covered after a waiting period of 48 months of continuous coverage under the policy.",
+    "retrieval_context": [
+      "4.1 Pre-existing diseases shall be covered after 48 months of continuous coverage.",
+      "A pre-existing disease is defined as any condition diagnosed or treated in the 48 months prior to policy inception."
+    ]
+  },
+  {
+    "input": "What is the room rent sub-limit?",
+    "expected_output": "Room rent is limited to 1% of the sum insured per day for a single private AC room.",
+    "retrieval_context": [
+      "Section 6.2: Room rent is capped at 1% of the sum insured per day.",
+      "Intensive Care Unit charges are limited to 2% of the sum insured per day."
+    ]
+  },
+  {
+    "input": "Is AYUSH treatment covered?",
+    "expected_output": "AYUSH treatment is covered up to the sum insured when taken in a government-recognised AYUSH hospital or institute.",
+    "retrieval_context": [
+      "Section 7.4: Expenses for Ayurveda, Yoga, Unani, Siddha, and Homeopathy treatments are covered.",
+      "Coverage applies when treatment is received in a government-recognised AYUSH hospital."
+    ]
+  },
+  {
+    "input": "What is the ambulance charge limit?",
+    "expected_output": "Ambulance charges are covered up to INR 3,000 per hospitalisation.",
+    "retrieval_context": [
+      "Section 8.1: Road ambulance charges are covered up to INR 3,000 per hospitalisation event.",
+      "Air ambulance is not covered under the standard policy."
+    ]
+  },
+  {
+    "input": "Are adventure sports injuries covered?",
+    "expected_output": "Injuries sustained while participating in adventure sports are excluded from coverage.",
+    "retrieval_context": [
+      "Section 9.3: The policy excludes claims arising from participation in hazardous or adventure sports activities.",
+      "Examples include mountaineering, bungee jumping, skydiving, and motor racing."
+    ]
+  },
+  {
+    "input": "What is the co-payment clause?",
+    "expected_output": "A co-payment of 10% of the admissible claim amount is applicable for insured persons above 60 years of age.",
+    "retrieval_context": [
+      "Section 10.1: A co-pay of 10% shall be borne by the insured for every admissible claim.",
+      "This co-payment clause applies to insured persons who are 60 years of age or older."
+    ]
+  },
+  {
+    "input": "How long does the insurer take to settle a claim?",
+    "expected_output": "The insurer will settle or reject a claim within 30 days of receiving all required documents.",
+    "retrieval_context": [
+      "Section 11.2: Upon receipt of all required claim documents, the insurer shall settle or reject the claim within 30 days.",
+      "Delayed settlement attracts interest at the bank rate plus 2% per annum."
+    ]
+  },
+  {
+    "input": "Is domiciliary hospitalisation covered?",
+    "expected_output": "Domiciliary hospitalisation is covered for a minimum period of 3 days, provided the condition requires hospitalisation but the patient cannot be moved to a hospital.",
+    "retrieval_context": [
+      "Section 12.1: Domiciliary hospitalisation expenses are covered for a minimum continuous period of 3 days.",
+      "Coverage applies when the patient's condition requires hospitalisation but admission is not possible due to medical reasons."
+    ]
+  },
+  {
+    "input": "What surgeries are excluded during the first year?",
+    "expected_output": "During the first year of the policy, surgeries for hernia, cataracts, joint replacement, and sinusitis are excluded.",
+    "retrieval_context": [
+      "Section 13.1 First-year exclusions: hernia, cataract, joint replacement, sinusitis, and varicose veins.",
+      "These exclusions apply only during the first 12 months and are covered thereafter unless a specific waiting period applies."
+    ]
+  },
+  {
+    "input": "Are dental treatment expenses covered?",
+    "expected_output": "Dental treatment expenses are excluded unless arising from an accident causing bodily injury.",
+    "retrieval_context": [
+      "Section 9.5: Dental treatment, including dental surgery, is excluded from coverage.",
+      "An exception applies when dental injury is caused by a direct accident resulting in physical trauma."
+    ]
+  },
+  {
+    "input": "What is the free-look period?",
+    "expected_output": "The insured may cancel the policy within 15 days of receiving the policy document if they disagree with the terms, and receive a proportionate refund of premium.",
+    "retrieval_context": [
+      "Section 14.1: A free-look period of 15 days is available from the date of receipt of the policy.",
+      "On cancellation during the free-look period, the insurer shall refund premium after deducting proportionate risk premium."
+    ]
+  },
+  {
+    "input": "Is mental illness covered under the policy?",
+    "expected_output": "Mental illness hospitalisation is covered under the policy in compliance with the Mental Healthcare Act, 2017.",
+    "retrieval_context": [
+      "Section 15.2: Coverage for mental illness is provided as required by the Mental Healthcare Act, 2017.",
+      "Inpatient psychiatric treatment is covered up to the sum insured on the same terms as physical illness."
+    ]
+  }
+]

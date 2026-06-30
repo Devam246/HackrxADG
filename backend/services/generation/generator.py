@@ -256,40 +256,22 @@ def _process_single_query(
     doc_type: str,
     doc_id: str,
     top_k: int,
-) -> str:
+) -> Tuple[str, bool, int, int]:
     """
-    Process a single query: expand with HyDE, embed, retrieve, compute confidence,
-    and call the LLM only if confidence is sufficient.
+    Process a single query using the V9 LangGraph agentic RAG pipeline.
+    Returns (answer, needs_human_review, original_tokens, final_tokens).
     """
-    from services.retrieval.hyde import generate_hypothetical_excerpt
+    from agent.rag_graph import run_agentic_rag
 
-    # 1. Expand query using HyDE (hypothetical document generation)
-    hyde_query = generate_hypothetical_excerpt(query)
-
-    # 2. Embed hypothetical query using gemini-embedding-001 (task_type="retrieval_query")
-    query_embedding = embed_text([hyde_query], task_type="retrieval_query")[0]
-
-    # 3. Retrieve using the HyDE embedding for dense, original query for BM25
-    retrieved_chunks = advanced_universal_retrieval(
-        query_embedding,
-        chunks,
-        chunk_embeddings,
-        inv_index,
-        query,
-        doc_type,
-        doc_id,
-        initial_k=20,
-        final_k=top_k,
+    return run_agentic_rag(
+        query=query,
+        chunks=chunks,
+        chunk_embeddings=chunk_embeddings,
+        inv_index=inv_index,
+        doc_type=doc_type,
+        doc_id=doc_id,
+        top_k=top_k,
     )
-
-    confidence = calculate_universal_confidence(query, retrieved_chunks, doc_type)
-
-    if confidence < 0.25:
-        return "Insufficient information to answer this question."
-
-    system, user_prompt = build_universal_prompt([query], [retrieved_chunks], [confidence], doc_type)
-    answer = batch_llm_answer(system, user_prompt, max_output_tokens=2000)[0]
-    return answer
 
 
 def handle_queries(
@@ -299,10 +281,11 @@ def handle_queries(
     inv_index: Dict,
     doc_type: str,
     doc_id: str,
-    top_k: int = 6,
-) -> List[str]:
+    top_k: int = settings.rerank_top_n,
+) -> Tuple[List[str], List[bool]]:
     """
-    Handles multiple queries in parallel using advanced retrieval and reranking.
+    Handles multiple queries in parallel using the V9 agentic RAG pipeline.
+    Returns (answers, needs_human_review_flags).
     """
     max_workers = min(len(queries), 8)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -319,6 +302,24 @@ def handle_queries(
             )
             for query in queries
         ]
-        results = [f.result() for f in futures]
+        results_tuples = [f.result() for f in futures]
 
-    return results
+    answers = [r[0] for r in results_tuples]
+    needs_review_flags = [r[1] for r in results_tuples]
+
+    # Accumulate token stats for reduction logging
+    total_orig = sum(r[2] for r in results_tuples)
+    total_final = sum(r[3] for r in results_tuples)
+    avg_reduction_pct = (1.0 - (total_final / total_orig)) * 100 if total_orig > 0 else 0.0
+
+    logger.info(
+        "request_context_compression_summary",
+        question_count=len(queries),
+        total_original_tokens=total_orig,
+        total_final_tokens=total_final,
+        average_reduction_percentage=round(avg_reduction_pct, 2),
+        human_review_triggered=sum(needs_review_flags),
+    )
+
+    return answers, needs_review_flags
+

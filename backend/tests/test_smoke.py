@@ -23,7 +23,7 @@ def test_query_smoke_returns_200(monkeypatch):
     monkeypatch.setattr(
         api.v1.routes_query,
         "handle_queries",
-        lambda *args, **kwargs: ["The grace period is 30 days."],
+        lambda *args, **kwargs: (["The grace period is 30 days."], [False]),
     )
     monkeypatch.setattr(api.v1.deps, "EXPECTED_BEARER_TOKEN", "test-token")
     document_cache.clear()

@@ -199,19 +199,25 @@
 
 ### V10 — Evaluation Suite Baseline
 
-> V10 adds the full evaluation harness. Re-run all prior versions if possible for apples-to-apples comparison.
+> V10 adds the full evaluation harness. Scores below are filled in after the first live run.
 
 | Metric | Score | Delta vs V9 | Notes |
 |---|---|---|---|
-| Faithfulness | — | — | First formally enforced score |
-| Answer Relevancy | — | — | |
-| Contextual Precision | — | — | |
-| Contextual Recall | — | — | |
+| Faithfulness | — | — | First formally enforced score (threshold ≥ 0.85) |
+| Answer Relevancy | — | — | Threshold ≥ 0.80 |
+| Contextual Precision | — | — | Threshold ≥ 0.75 |
+| Contextual Recall | — | — | Threshold ≥ 0.75 |
 
 **Date measured:**  
 **Commit:**  
-**Benchmark questions:** — (fill in count)  
-**CI:** rag-eval job active on main branch
+**Benchmark questions:** 15 (health insurance policy Q&A pairs)  
+**CI:** `rag-eval` GitHub Actions job active on main branch
+
+**To fill in these scores, run:**
+```powershell
+$env:GEMINI_API_KEY="your_key"
+pytest backend/tests/rag_eval/ -v --tb=short
+```
 
 ---
 

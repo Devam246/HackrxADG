@@ -17,6 +17,7 @@ class Chunk:
     chunk_id: str
     is_parent: bool
     token_count: int
+    rerank_score: Optional[float] = None
 
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)

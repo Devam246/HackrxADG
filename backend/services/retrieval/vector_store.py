@@ -163,12 +163,17 @@ def advanced_universal_retrieval(
     # 3. Reciprocal Rank Fusion
     fused_results = reciprocal_rank_fusion(dense_results, sparse_results)
 
-    # 4. Take the top final_k candidates and map them to their parent chunks
-    top_indices = [idx for idx, _ in fused_results[:final_k]]
-    retrieved_chunks = [chunks[idx] for idx in top_indices]
+    # 4. Take the top initial_k candidates and score them with Cross-Encoder Reranker
+    from services.retrieval.reranker import CrossEncoderReranker
 
+    # Copy candidate chunks to avoid mutating cached chunks in document_cache
+    candidates = [chunks[idx].copy() for idx, _ in fused_results[:initial_k]]
+    reranker = CrossEncoderReranker()
+    reranked_chunks = reranker.rerank(query, candidates, top_n=final_k)
+
+    # 5. Map the top reranked chunks to their parent chunks
     final_retrieved = []
-    for chunk in retrieved_chunks:
+    for chunk in reranked_chunks:
         parent_id = chunk.parent_id
         if parent_id:
             parent_text = get_parent(parent_id, doc_id)
@@ -183,6 +188,8 @@ def advanced_universal_retrieval(
         "hybrid_retrieval_completed",
         doc_id=doc_id,
         returned_chunks=len(final_retrieved),
-        top_scores=[round(score, 5) for _, score in fused_results[:final_k]],
+        top_rerank_scores=[
+            round(c.rerank_score, 5) for c in final_retrieved if c.rerank_score is not None
+        ],
     )
     return final_retrieved

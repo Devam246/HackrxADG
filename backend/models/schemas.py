@@ -11,6 +11,7 @@ class HackathonResponse(BaseModel):
     answers: List[str]
     processing_time: Optional[float] = None
     document_id: Optional[str] = None
+    needs_human_review: Optional[List[bool]] = None
 
 
 class HealthResponse(BaseModel):

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import structlog
 
 from api.v1.deps import verify_token
+from config import get_settings
 from models.schemas import HackathonRequest, HackathonResponse
 from services.generation.generator import handle_queries
 from services.ingestion.chunker import get_doc_id, load_or_create_chunks
@@ -12,6 +13,7 @@ from utils.cache import document_cache
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
+settings = get_settings()
 
 MAX_QUESTIONS_PER_REQUEST = 50
 
@@ -75,7 +77,7 @@ async def run_rag_system(
 
         logger.info("queries_started", doc_id=doc_id, question_count=len(questions))
         query_start = time.perf_counter()
-        answers = await asyncio.get_event_loop().run_in_executor(
+        answers, needs_human_review = await asyncio.get_event_loop().run_in_executor(
             None,
             handle_queries,
             questions,
@@ -84,7 +86,7 @@ async def run_rag_system(
             inv_index,
             doc_type,
             doc_id,
-            3,
+            settings.rerank_top_n,
         )
 
         total_time = time.perf_counter() - start_time
@@ -102,7 +104,9 @@ async def run_rag_system(
             answers=answers,
             processing_time=round(total_time, 3),
             document_id=doc_id,
+            needs_human_review=needs_human_review,
         )
     except Exception as exc:
         logger.exception("rag_request_failed", doc_id=doc_id, error=str(exc))
         raise HTTPException(status_code=500, detail="Internal server error") from exc
+
