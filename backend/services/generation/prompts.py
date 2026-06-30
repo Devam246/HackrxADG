@@ -117,3 +117,13 @@ Example of correct response format:
     user = "\n".join(lines) + "\n\nRespond with valid JSON only:"
 
     return system, user
+
+
+HYDE_PROMPT = (
+    "You are an insurance policy expert.\n"
+    "Write a short paragraph (3–5 sentences) that would appear in a professional \n"
+    "insurance policy and directly answer this question using formal insurance \n"
+    "terminology. No preamble.\n\n"
+    "Question: {question}\n"
+    "Hypothetical policy excerpt:"
+)

@@ -13,7 +13,12 @@ settings = get_settings()
 genai.configure(api_key=settings.gemini_api_key)
 
 
-def embed_voyage(texts: List[str], model: str = "gemini-embedding-001", batch_size=100) -> np.ndarray:
+def embed_text(
+    texts: List[str],
+    task_type: str = "retrieval_document",
+    model: str = "gemini-embedding-001",
+    batch_size: int = 100,
+) -> np.ndarray:
     """Generate real Gemini embeddings (gemini-embedding-001) with batching (max 100 per API call)."""
     if not texts:
         return np.zeros((0, 3072), dtype="float32")
@@ -27,7 +32,7 @@ def embed_voyage(texts: List[str], model: str = "gemini-embedding-001", batch_si
     # Batch embeddings: max 100 per API call
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
-        response = genai.embed_content(model=f"models/{model_name}", content=batch, task_type="retrieval_document")
+        response = genai.embed_content(model=f"models/{model_name}", content=batch, task_type=task_type)
         all_embeddings.extend(response["embedding"])
 
     return np.array(all_embeddings, dtype="float32")

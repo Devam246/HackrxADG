@@ -18,7 +18,7 @@ from services.ingestion.parsers import (
     extract_text_from_docx,
     extract_text_from_pdf,
 )
-from services.retrieval.embedder import embed_voyage
+from services.retrieval.embedder import embed_text
 
 logger = structlog.get_logger(__name__)
 
@@ -446,7 +446,7 @@ def load_or_create_cache(url: str, raw_text: str, doc_type: str) -> Tuple[List[D
         for c in chunks:
             c["doc_id"] = doc_id
 
-        embeddings = embed_voyage([c["text"] for c in chunks])
+        embeddings = embed_text([c["text"] for c in chunks], task_type="retrieval_document")
 
         pickle.dump(chunks, open(chunks_path, "wb"))
         np.save(embeddings_path, embeddings)
@@ -784,7 +784,7 @@ def load_or_create_chunks(
         with open(parents_path, "w", encoding="utf-8") as f:
             json.dump(parents_dict, f, ensure_ascii=False, indent=2)
 
-        embeddings = embed_voyage([c.text for c in child_chunks])
+        embeddings = embed_text([c.text for c in child_chunks], task_type="retrieval_document")
         store_chunks(doc_id, chunks, embeddings)
 
         from services.retrieval.bm25_index import build_and_save_bm25_index

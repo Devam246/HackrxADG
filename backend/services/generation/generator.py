@@ -14,7 +14,7 @@ from services.generation.postprocessor import (
     parse_json_response,
 )
 from services.generation.prompts import build_universal_prompt
-from services.retrieval.embedder import embed_voyage
+from services.retrieval.embedder import embed_text
 from services.retrieval.vector_store import advanced_universal_retrieval
 
 logger = structlog.get_logger(__name__)
@@ -258,11 +258,18 @@ def _process_single_query(
     top_k: int,
 ) -> str:
     """
-    Process a single query: embed, retrieve, compute confidence,
+    Process a single query: expand with HyDE, embed, retrieve, compute confidence,
     and call the LLM only if confidence is sufficient.
     """
-    query_embedding = embed_voyage([query])[0]
+    from services.retrieval.hyde import generate_hypothetical_excerpt
 
+    # 1. Expand query using HyDE (hypothetical document generation)
+    hyde_query = generate_hypothetical_excerpt(query)
+
+    # 2. Embed hypothetical query using gemini-embedding-001 (task_type="retrieval_query")
+    query_embedding = embed_text([hyde_query], task_type="retrieval_query")[0]
+
+    # 3. Retrieve using the HyDE embedding for dense, original query for BM25
     retrieved_chunks = advanced_universal_retrieval(
         query_embedding,
         chunks,
