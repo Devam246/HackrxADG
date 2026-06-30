@@ -4,29 +4,33 @@ from typing import List, Tuple
 import numpy as np
 from sklearn.decomposition import PCA
 import structlog
+import google.generativeai as genai
+from config import get_settings
 
 logger = structlog.get_logger(__name__)
+settings = get_settings()
+
+genai.configure(api_key=settings.gemini_api_key)
 
 
-def embed_voyage(texts: List[str], model: str = "local-hash", batch_size=300) -> np.ndarray:
-    """Legacy-named local embedding shim kept for V1 monolith compatibility."""
-    # TODO: V3 — replace with real gemini-embedding-001
-    dimensions = 384
-    embeddings = np.zeros((len(texts), dimensions), dtype="float32")
+def embed_voyage(texts: List[str], model: str = "gemini-embedding-001", batch_size=100) -> np.ndarray:
+    """Generate real Gemini embeddings (gemini-embedding-001) with batching (max 100 per API call)."""
+    if not texts:
+        return np.zeros((0, 3072), dtype="float32")
 
-    for row, text in enumerate(texts):
-        tokens = re.findall(r"\b\w+\b", text.lower())
-        for token in tokens:
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            index = int.from_bytes(digest[:4], "big") % dimensions
-            sign = 1.0 if digest[4] % 2 == 0 else -1.0
-            embeddings[row, index] += sign
+    if isinstance(texts, str):
+        texts = [texts]
 
-        norm = np.linalg.norm(embeddings[row])
-        if norm > 0:
-            embeddings[row] /= norm
+    model_name = "gemini-embedding-001"
+    all_embeddings = []
 
-    return embeddings
+    # Batch embeddings: max 100 per API call
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        response = genai.embed_content(model=f"models/{model_name}", content=batch, task_type="retrieval_document")
+        all_embeddings.extend(response["embedding"])
+
+    return np.array(all_embeddings, dtype="float32")
 
 
 def reduce_dimensions(vectors: np.ndarray, target_dim: int = 512) -> Tuple[np.ndarray, PCA]:

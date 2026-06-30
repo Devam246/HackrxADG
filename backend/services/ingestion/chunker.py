@@ -402,6 +402,8 @@ def create_chunk(
     keywords: List[str],
     doc_id: str = "unknown",
 ) -> Dict:
+    token_count = len(tokenizer.encode(text))
+    chunk_id = f"{doc_id}_{chunk_index}"
     return {
         "doc_id": section.get("doc_id", doc_id),
         "text": f"{section['section_id']} {section['section_title']}\n{text}",
@@ -410,6 +412,13 @@ def create_chunk(
         "chunk_index": chunk_index,
         "keywords": keywords,
         "raw_text": text,
+        # V3 metadata fields
+        "section": section["section_id"],
+        "page": -1,
+        "parent_id": None,
+        "chunk_id": chunk_id,
+        "is_parent": False,
+        "token_count": token_count,
     }
 
 
@@ -621,16 +630,15 @@ def load_or_create_chunks(
     doc_type = DocumentClassifier.classify_document(cleaned_text[:5000])
     logger.info("legacy_log", message=f"🎯 Document type detected: {doc_type.upper()}")
 
-    chunks_path = CACHE_DIR / f"{doc_id}_chunks.pkl"
-    embeddings_path = CACHE_DIR / f"{doc_id}_embeddings.npy"
+    from services.retrieval.vector_store import get_chunks_from_store, store_chunks
 
-    if chunks_path.exists() and embeddings_path.exists():
+    chunks, embeddings = get_chunks_from_store(doc_id)
+
+    if chunks and len(chunks) > 0:
         logger.info(
             "legacy_log",
-            message=f"✅ Using cached chunks and embeddings for {file_url}",
+            message=f"✅ Using cached chunks and embeddings from ChromaDB for {file_url}",
         )
-        chunks = pickle.load(open(chunks_path, "rb"))
-        embeddings = np.load(embeddings_path)
     else:
         logger.info(
             "legacy_log",
@@ -649,8 +657,7 @@ def load_or_create_chunks(
 
         logger.info("legacy_log", message=f"🧩 Chunks created: {len(chunks)}")
         embeddings = embed_voyage([c["text"] for c in chunks])
-        pickle.dump(chunks, open(chunks_path, "wb"))
-        np.save(embeddings_path, embeddings)
+        store_chunks(doc_id, chunks, embeddings)
 
     duration = (os.time() if hasattr(os, "time") else __import__("time").time()) - start_total
     logger.info(

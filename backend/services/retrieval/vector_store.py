@@ -1,34 +1,103 @@
 from collections import defaultdict
+from pathlib import Path
 import re
 from typing import Dict, List, Set, Tuple
 import numpy as np
 import structlog
+import chromadb
+from config import get_settings
 
 from utils.logging import load_spacy_model
 
 logger = structlog.get_logger(__name__)
 nlp = load_spacy_model()
+settings = get_settings()
+
+chroma_client = chromadb.PersistentClient(path=str(Path(settings.chroma_persist_dir).resolve()))
 
 
-class NumpyL2Index:
-    def __init__(self, vectors: np.ndarray) -> None:
-        self.vectors = vectors.astype("float32")
-
-    def search(self, queries: np.ndarray, top_k: int):
-        query_vectors = np.atleast_2d(queries).astype("float32")
-        distances = np.sum((query_vectors[:, None, :] - self.vectors[None, :, :]) ** 2, axis=2)
-        indices = np.argsort(distances, axis=1)[:, :top_k]
-        sorted_distances = np.take_along_axis(distances, indices, axis=1)
-        return sorted_distances, indices
+def get_collection(doc_id: str):
+    return chroma_client.get_or_create_collection(
+        name=f"doc_{doc_id}", metadata={"hnsw:space": "cosine", "hnsw:construction_ef": 200, "hnsw:M": 32}
+    )
 
 
-def build_faiss_index(vectors: np.ndarray, use_pq: bool = False):
-    """
-    Build a lightweight in-process L2 index with the old FAISS-compatible search API.
-    """
-    if use_pq:
-        logger.warning("pq_not_supported", fallback="numpy_l2")
-    return NumpyL2Index(vectors)
+def store_chunks(doc_id: str, chunks: List[Dict], embeddings: np.ndarray):
+    try:
+        chroma_client.delete_collection(name=f"doc_{doc_id}")
+    except Exception:
+        pass
+    collection = get_collection(doc_id)
+
+    ids = [c["chunk_id"] for c in chunks]
+    documents = [c["text"] for c in chunks]
+
+    metadatas = []
+    for c in chunks:
+        metadatas.append(
+            {
+                "doc_id": c["doc_id"],
+                "section": c["section"],
+                "page": c["page"],
+                "parent_id": c["parent_id"] if c["parent_id"] is not None else "",
+                "chunk_id": c["chunk_id"],
+                "is_parent": c["is_parent"],
+                "token_count": c["token_count"],
+                "section_title": c["section_title"],
+                "chunk_index": c["chunk_index"],
+                "keywords": ",".join(c["keywords"]) if isinstance(c["keywords"], list) else str(c["keywords"]),
+                "raw_text": c["raw_text"],
+            }
+        )
+
+    collection.add(
+        ids=ids,
+        embeddings=embeddings.tolist() if isinstance(embeddings, np.ndarray) else embeddings,
+        metadatas=metadatas,
+        documents=documents,
+    )
+
+
+def get_chunks_from_store(doc_id: str) -> Tuple[List[Dict], np.ndarray]:
+    try:
+        collection = chroma_client.get_collection(name=f"doc_{doc_id}")
+    except Exception:
+        return [], np.zeros((0, 3072), dtype="float32")
+
+    results = collection.get(include=["documents", "metadatas", "embeddings"])
+    if not results or not results["ids"]:
+        return [], np.zeros((0, 3072), dtype="float32")
+
+    chunks = []
+    embeddings_list = results["embeddings"]
+
+    for i, cid in enumerate(results["ids"]):
+        meta = results["metadatas"][i]
+        kws = meta["keywords"].split(",") if meta.get("keywords") else []
+
+        chunks.append(
+            {
+                "doc_id": meta["doc_id"],
+                "text": results["documents"][i],
+                "section_id": meta["section"],
+                "section_title": meta["section_title"],
+                "chunk_index": int(meta["chunk_index"]),
+                "keywords": kws,
+                "raw_text": meta["raw_text"],
+                "section": meta["section"],
+                "page": int(meta["page"]),
+                "parent_id": meta["parent_id"] if meta["parent_id"] != "" else None,
+                "chunk_id": meta["chunk_id"],
+                "is_parent": bool(meta["is_parent"]),
+                "token_count": int(meta["token_count"]),
+            }
+        )
+
+    sorted_indices = np.argsort([c["chunk_index"] for c in chunks])
+    chunks = [chunks[idx] for idx in sorted_indices]
+    embeddings = np.array([embeddings_list[idx] for idx in sorted_indices], dtype="float32")
+
+    return chunks, embeddings
 
 
 def extract_query_keywords(query: str, top_k=5) -> List[str]:
@@ -72,17 +141,6 @@ def filter_candidates(inv_index: Dict[str, Set[int]], query: str, total: int, ve
     return list(cand)
 
 
-def search_masked_subset(qvec: np.ndarray, candidate_ids, all_vectors: np.ndarray, top_k=5):
-    cids = [int(i) for i in candidate_ids]
-    if not cids:
-        return np.array([]), np.array([])
-    vecs_subset = all_vectors[cids]
-    tmp = NumpyL2Index(vecs_subset)
-    D, I = tmp.search(qvec.reshape(1, -1), top_k)
-    final = [cids[i] for i in I[0]]
-    return D[0], final
-
-
 def filter_universal_candidates(
     inv_index: Dict[str, Set[int]], query: str, chunks: List[Dict], doc_id: str
 ) -> List[int]:
@@ -122,14 +180,23 @@ def filter_universal_candidates(
     return list(candidates)
 
 
-def get_semantic_candidates(query_emb: np.ndarray, chunk_embeddings: np.ndarray, k: int) -> List[int]:
-    query_norm = query_emb / np.linalg.norm(query_emb)
-    chunk_norms = chunk_embeddings / np.linalg.norm(chunk_embeddings, axis=1, keepdims=True)
+def get_semantic_candidates(query_emb: np.ndarray, doc_id: str, k: int) -> List[int]:
+    """Get candidates based on semantic similarity via ChromaDB query"""
+    try:
+        collection = get_collection(doc_id)
+        results = collection.query(
+            query_embeddings=[query_emb.tolist()] if isinstance(query_emb, np.ndarray) else [query_emb],
+            n_results=k,
+            include=["metadatas"],
+        )
+        if not results or not results["metadatas"] or not results["metadatas"][0]:
+            return []
 
-    similarities = np.dot(chunk_norms, query_norm)
-    top_indices = np.argsort(similarities)[::-1][:k]
-
-    return top_indices.tolist()
+        indices = [int(m["chunk_index"]) for m in results["metadatas"][0]]
+        return indices
+    except Exception as e:
+        logger.exception("chromadb_query_failed", error=str(e))
+        return []
 
 
 def get_section_based_candidates(query: str, chunks: List[Dict], doc_type: str) -> List[int]:
@@ -344,8 +411,7 @@ def advanced_universal_retrieval(
     keyword_candidates = filter_universal_candidates(inv_index, query, chunks, doc_id)
     candidates_sets.append(set(keyword_candidates))
 
-    semantic_candidates_all = get_semantic_candidates(query_embedding, chunk_embeddings, initial_k * 4)
-    semantic_candidates = [i for i in semantic_candidates_all if chunks[i]["doc_id"] == doc_id]
+    semantic_candidates = get_semantic_candidates(query_embedding, doc_id, initial_k * 4)
     candidates_sets.append(set(semantic_candidates))
 
     section_candidates_all = get_section_based_candidates(query, chunks, doc_type)
