@@ -5,9 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    bearer_token: str = Field(default="", validation_alias="HACKATHON_BEARER_TOKEN")
-    gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
-    voyage_api_key: str = Field(default="", validation_alias="VOYAGE_API_KEY")
+    bearer_token: str = Field(validation_alias="HACKATHON_BEARER_TOKEN")
+    gemini_api_key: str = Field(validation_alias="GEMINI_API_KEY")
     environment: str = Field(default="production", validation_alias="ENVIRONMENT")
 
     embedding_model: str = "gemini-embedding-001"

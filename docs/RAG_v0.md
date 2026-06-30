@@ -1,43 +1,17 @@
-from functools import lru_cache
+# RAG v0 - Configuration Baseline Correction
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+This file records a V0 documentation correction.
 
+The original pre-V1 `config.py` source could not be recovered from Git history:
 
-class Settings(BaseSettings):
-    bearer_token: str = Field(..., alias="HACKATHON_BEARER_TOKEN")
-    gemini_api_key: str = Field(..., alias="GEMINI_API_KEY")
-    environment: str = Field("production", alias="ENVIRONMENT")
+- `backend/config.py` was first tracked in the V1 commit.
+- no tracked root-level `config.py` exists in the pre-V1 commit.
 
-    embedding_model: str = "gemini-embedding-001"
-    llm_model: str = "gemini-2.5-flash"
-    reranker_model: str = "BAAI/bge-reranker-v2-m3"
+Known V0 configuration state (pre-V1 — corrupted in this repo, not recoverable from Git history):
 
-    retrieval_top_k: int = 20
-    rerank_top_n: int = 8
-    final_context_chunks: int = 5
-    parent_chunk_size: int = 1500
-    child_chunk_size: int = 256
-    chunk_overlap: int = 32
-
-    chroma_persist_dir: str = "./chroma_db"
-    qdrant_url: str = ""
-    qdrant_api_key: str = ""
-
-    redis_url: str = "redis://localhost:6379"
-    cache_ttl_seconds: int = 3600
-    semantic_cache_threshold: float = 0.04
-
-    langsmith_api_key: str = ""
-    langsmith_project: str = "policymind-ai"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        populate_by_name=True,
-        extra="ignore",
-    )
+- `config.py` used `SettingsConfigDict(fields={...})` — invalid syntax for `pydantic-settings` v2 (treated as a no-op / ignored).
+- `bearer_token` and `gemini_api_key` were not required (or had masking defaults), so missing keys did not fail fast at startup.
+- A leftover `voyage_api_key` field existed even though `voyageai` is banned by project rules.
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
+The current, fixed V1 configuration is documented in `docs/RAG_v1.md`.

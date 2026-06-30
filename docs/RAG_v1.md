@@ -29,8 +29,8 @@ Make the existing monolithic FastAPI RAG backend start reliably, remove the know
 |---|---|
 | `backend/main.py` | Replaced old import with `build_inverted_index`; rewrote app file with structured logging and central settings access while keeping the existing `/hackrx/run` endpoint. |
 | `backend/rag_pipeline.py` | Removed duplicate retrieval overrides; added UUID temp downloads; removed global doc type state; replaced `print()` with structlog calls; replaced FAISS usage with a NumPy L2 shim; added spaCy fallback. |
-| `backend/config.py` | Added pydantic-settings config with `Field(validation_alias=...)`; removed invalid `SettingsConfigDict(fields=...)`. |
-| `backend/requirements.txt` | Removed banned/unused V1 packages including `supabase`, `cohere`, `faiss-cpu`, `langchain-core`, `langchain-text-splitters`, and `pdfplumber`; added `structlog` and `pydantic-settings`. |
+| `backend/config.py` | Added pydantic-settings config with `Field(validation_alias=...)`; removed invalid `SettingsConfigDict(fields=...)`; removed leftover `voyage_api_key`. |
+| `backend/requirements.txt` | Removed banned/unused V1 packages including `supabase`, `cohere`, `faiss-cpu`, `langchain-core`, `langchain-text-splitters`, `pdfplumber`, and `voyageai`; added `structlog` and `pydantic-settings`. |
 | `backend/requirements-dev.txt` | Added pytest and ruff tooling dependencies. |
 | `backend/pyproject.toml` | Added ruff and pytest config for the backend-flat layout; excluded generated venv/cache dirs; silenced unrelated third-party SWIG warnings. |
 | `backend/tests/conftest.py` | Added test environment defaults and import path setup. |
@@ -47,6 +47,7 @@ Make the existing monolithic FastAPI RAG backend start reliably, remove the know
 - Concurrent downloads use unique temporary filenames: `rag_{doc_id}_{uuid}{ext}`.
 - Document type is request-local inside `load_or_create_chunks`.
 - Clean installs no longer require `faiss-cpu`; the old index helper now returns a small NumPy-backed object with a compatible `.search()` method.
+- Clean installs no longer require `voyageai`; the old `embed_voyage` helper name is kept as a local deterministic embedding shim for V1 monolith compatibility.
 - Missing `en_core_web_sm` no longer prevents startup; the pipeline falls back to `spacy.blank("en")`.
 - Configuration is centralized in `backend/config.py` and uses valid pydantic-settings v2 aliases.
 - Logs use `structlog` instead of direct `print()` calls.
@@ -58,8 +59,11 @@ Make the existing monolithic FastAPI RAG backend start reliably, remove the know
 Run from `backend/`:
 
 ```text
+.\venv\Scripts\python.exe -c "import main; print('import ok')"
+import ok
+
 .\venv\Scripts\python.exe -m pytest -q
-1 passed in 7.43s
+1 passed in 4.29s
 
 .\venv\Scripts\python.exe -m ruff check .
 All checks passed!
@@ -75,4 +79,4 @@ All checks passed!
 - The backend is still a monolith. No V2 service/module split was started.
 - The public endpoint remains the existing `/hackrx/run`; `/api/v1/*` routes belong to later architecture work.
 - The smoke test uses monkeypatched services and does not hit real document downloads, embeddings, or Gemini.
-- Voyage embeddings remain in place because provider migration belongs to a later roadmap version.
+- The V1 local embedding shim is only a stabilization fallback; Gemini embedding migration belongs to a later roadmap version.

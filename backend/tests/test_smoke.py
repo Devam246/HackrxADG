@@ -1,6 +1,9 @@
 from fastapi.testclient import TestClient
 
 import main
+import api.v1.routes_query
+import api.v1.deps
+from utils.cache import document_cache
 
 
 def test_query_smoke_returns_200(monkeypatch):
@@ -15,11 +18,15 @@ def test_query_smoke_returns_200(monkeypatch):
         }
         return [chunk], [[0.1, 0.2]], "doc123", "insurance"
 
-    monkeypatch.setattr(main, "load_or_create_chunks", fake_load_or_create_chunks)
-    monkeypatch.setattr(main, "build_inverted_index", lambda chunks: {"grace": {0}})
-    monkeypatch.setattr(main, "handle_queries", lambda *args, **kwargs: ["The grace period is 30 days."])
-    monkeypatch.setattr(main, "EXPECTED_BEARER_TOKEN", "test-token")
-    main.document_cache.clear()
+    monkeypatch.setattr(api.v1.routes_query, "load_or_create_chunks", fake_load_or_create_chunks)
+    monkeypatch.setattr(api.v1.routes_query, "build_inverted_index", lambda chunks: {"grace": {0}})
+    monkeypatch.setattr(
+        api.v1.routes_query,
+        "handle_queries",
+        lambda *args, **kwargs: ["The grace period is 30 days."],
+    )
+    monkeypatch.setattr(api.v1.deps, "EXPECTED_BEARER_TOKEN", "test-token")
+    document_cache.clear()
 
     client = TestClient(main.app)
     response = client.post(

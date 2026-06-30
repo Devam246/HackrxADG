@@ -47,6 +47,10 @@ If you skip any of these steps you will create duplicate files, wrong imports, a
 - Type hints on every function signature
 - No dead code, no commented-out blocks left behind
 
+### Files
+- docs/RAG_v0.md is READ-ONLY after initial creation. Never edit it, even to fix or improve it. If V0 was documented inaccurately, note the correction in the current version's RAG_vX.md instead.
+
+
 ### Architecture (one-way dependency chain)
 ```
 Ingestion → Retrieval → Generation → API

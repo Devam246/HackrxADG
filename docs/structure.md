@@ -1,9 +1,9 @@
 # PolicyMind AI - Project Structure
 
-**Current Version:** V1 stable foundation
+**Current Version:** V2 architecture refactor
 **Last Updated:** 2026-06-30
 
-This file reflects what exists on disk right now. It intentionally does not list the V2 modular service folders as existing, because V2 has not started.
+This file reflects what exists on disk right now.
 
 ---
 
@@ -22,9 +22,8 @@ policymind-ai/
 ```
 
 Notes:
-- The backend is flat inside `backend/`.
+- The backend is modularly structured under `backend/`.
 - There is no frontend yet.
-- There is no root-level `pyproject.toml`, `requirements.txt`, `main.py`, or `rag_pipeline.py`; those files are under `backend/`.
 - Archived planning files live under `docs/ARCHIVE/`.
 
 ---
@@ -35,14 +34,38 @@ Notes:
 backend/
 ├── .env                         # Local secrets only; do not commit
 ├── config.py                    # Pydantic Settings added in V1
-├── main.py                      # FastAPI app; still monolithic until V2
+├── main.py                      # FastAPI app (app factory only)
 ├── pyproject.toml               # Ruff + pytest config
-├── rag_pipeline.py              # Monolithic RAG pipeline; V2 will split this
 ├── requirements.txt             # Runtime dependencies cleaned in V1
 ├── requirements-dev.txt         # Dev/test dependencies added in V1
+├── api/
+│   └── v1/
+│       ├── deps.py              # Auth dependencies
+│       ├── routes_health.py     # System health and ping routes
+│       └── routes_query.py      # HackRx run query routes
+├── models/
+│   ├── domain.py                # Domain-level dataclasses (Chunk, Document)
+│   └── schemas.py               # Pydantic request/response schemas
+├── services/
+│   ├── ingestion/
+│   │   ├── classifier.py        # Document type classifier
+│   │   ├── downloader.py        # Safe downloader
+│   │   ├── parsers.py           # Text parsers (PDF, DOCX, EML)
+│   │   └── chunker.py           # Text cleaning, sectioning, and chunking
+│   ├── retrieval/
+│   │   ├── embedder.py          # Voyage embedder shim (V3 placeholder) and PCA
+│   │   └── vector_store.py      # In-memory indexes, candidate filters, scores
+│   └── generation/
+│       ├── generator.py         # LLM batch generator and orchestration
+│       ├── postprocessor.py     # JSON parser and confidence evaluation
+│       └── prompts.py           # Batch and domain-specific prompt builders
+├── utils/
+│   ├── cache.py                 # LRU Document cache
+│   ├── logging.py               # structlog configuration and spaCy model loading
+│   └── security.py              # Stub SSRF guard
 └── tests/
-    ├── conftest.py
-    └── test_smoke.py
+    ├── conftest.py              # Test configuration and path setup
+    └── test_smoke.py            # Smoke test for POST /hackrx/run
 ```
 
 Generated local directories that may exist but are not source:
@@ -60,14 +83,10 @@ backend/
 
 ## Not Yet Created
 
-These are future-version targets and do not exist in V1:
+These are future-version targets and do not exist in V2:
 
 ```text
-backend/api/
-backend/services/
-backend/models/
-backend/utils/
-backend/agent/
+backend/agent/                   # LangGraph Agentic graph (V9 scope)
 frontend/
 .github/workflows/
 ```
@@ -96,6 +115,7 @@ docs/
 ├── guide.md
 ├── RAG_v0.md
 ├── RAG_v1.md
+├── RAG_v2.md
 ├── rules.md
 └── structure.md
 ```
@@ -104,18 +124,11 @@ docs/
 
 ## Key File Descriptions
 
-| File | Purpose | V1 status |
+| File | Purpose | V2 status |
 |---|---|---|
-| `backend/main.py` | FastAPI entry point and hackathon endpoint | Fixed import crash, structured logging in place |
-| `backend/rag_pipeline.py` | Monolithic download, parse, chunk, retrieve, generate pipeline | Duplicate retrieval overrides removed; FAISS import replaced with NumPy shim |
-| `backend/config.py` | Central settings object | Uses `Field(validation_alias=...)`; no deprecated `SettingsConfigDict(fields=...)` |
-| `backend/requirements.txt` | Runtime dependencies | Banned V1 dependencies removed |
-| `backend/requirements-dev.txt` | Dev/test dependencies | Added pytest, pytest-cov, pytest-mock, ruff |
-| `backend/pyproject.toml` | Tooling config | Ruff and pytest configured for backend-flat layout |
-| `backend/tests/test_smoke.py` | API smoke test | Monkeypatches service calls and bearer token |
-
----
-
-## V2 Reminder
-
-Do not create `api/`, `services/`, `models/`, `utils/`, or `agent/` during V1. Those folders belong to the V2 architecture refactor.
+| `backend/main.py` | FastAPI entry point and middleware | Converted to application factory only |
+| `backend/api/v1/` | FastAPI routes | Separated into system routes and query routes |
+| `backend/services/` | Modularized business logic | Monolith `rag_pipeline.py` split into ingestion, retrieval, and generation packages |
+| `backend/models/` | Type definitions and schema structures | Separated Pydantic schemas and placeholder domain dataclasses |
+| `backend/utils/` | Shared utilities | Logging, cache, and a stub security file created |
+| `backend/tests/test_smoke.py` | API smoke test | Patched to mock modules at new modular lookup paths |
