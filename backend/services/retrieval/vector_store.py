@@ -1,12 +1,14 @@
 from collections import defaultdict
+import json
 from pathlib import Path
 import re
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Optional
 import numpy as np
 import structlog
 import chromadb
 from config import get_settings
 
+from models.domain import Chunk
 from utils.logging import load_spacy_model
 
 logger = structlog.get_logger(__name__)
@@ -22,31 +24,48 @@ def get_collection(doc_id: str):
     )
 
 
-def store_chunks(doc_id: str, chunks: List[Dict], embeddings: np.ndarray):
+def get_parent(parent_id: str, doc_id: str) -> Optional[str]:
+    """Lookup parent text by parent_id from local JSON store"""
+    parents_path = Path("cache") / f"parents_{doc_id}.json"
+    if not parents_path.exists():
+        return None
+    try:
+        with open(parents_path, "r", encoding="utf-8") as f:
+            parents_dict = json.load(f)
+        return parents_dict.get(parent_id)
+    except Exception as e:
+        logger.exception("parent_lookup_failed", error=str(e))
+        return None
+
+
+def store_chunks(doc_id: str, chunks: List[Chunk], embeddings: np.ndarray):
     try:
         chroma_client.delete_collection(name=f"doc_{doc_id}")
     except Exception:
         pass
     collection = get_collection(doc_id)
 
-    ids = [c["chunk_id"] for c in chunks]
-    documents = [c["text"] for c in chunks]
+    # Filter to child chunks only (parents are stored in local JSON, not embedded or stored in ChromaDB)
+    child_chunks = [c for c in chunks if not c.is_parent]
+
+    ids = [c.chunk_id for c in child_chunks]
+    documents = [c.text for c in child_chunks]
 
     metadatas = []
-    for c in chunks:
+    for c in child_chunks:
         metadatas.append(
             {
-                "doc_id": c["doc_id"],
-                "section": c["section"],
-                "page": c["page"],
-                "parent_id": c["parent_id"] if c["parent_id"] is not None else "",
-                "chunk_id": c["chunk_id"],
-                "is_parent": c["is_parent"],
-                "token_count": c["token_count"],
-                "section_title": c["section_title"],
-                "chunk_index": c["chunk_index"],
-                "keywords": ",".join(c["keywords"]) if isinstance(c["keywords"], list) else str(c["keywords"]),
-                "raw_text": c["raw_text"],
+                "doc_id": c.doc_id,
+                "section": c.section,
+                "page": c.page,
+                "parent_id": c.parent_id if c.parent_id is not None else "",
+                "chunk_id": c.chunk_id,
+                "is_parent": c.is_parent,
+                "token_count": c.token_count,
+                "section_title": c.section_title,
+                "chunk_index": c.chunk_index,
+                "keywords": ",".join(c.keywords) if isinstance(c.keywords, list) else str(c.keywords),
+                "raw_text": c.raw_text,
             }
         )
 
@@ -58,7 +77,7 @@ def store_chunks(doc_id: str, chunks: List[Dict], embeddings: np.ndarray):
     )
 
 
-def get_chunks_from_store(doc_id: str) -> Tuple[List[Dict], np.ndarray]:
+def get_chunks_from_store(doc_id: str) -> Tuple[List[Chunk], np.ndarray]:
     try:
         collection = chroma_client.get_collection(name=f"doc_{doc_id}")
     except Exception:
@@ -76,24 +95,24 @@ def get_chunks_from_store(doc_id: str) -> Tuple[List[Dict], np.ndarray]:
         kws = meta["keywords"].split(",") if meta.get("keywords") else []
 
         chunks.append(
-            {
-                "doc_id": meta["doc_id"],
-                "text": results["documents"][i],
-                "section_id": meta["section"],
-                "section_title": meta["section_title"],
-                "chunk_index": int(meta["chunk_index"]),
-                "keywords": kws,
-                "raw_text": meta["raw_text"],
-                "section": meta["section"],
-                "page": int(meta["page"]),
-                "parent_id": meta["parent_id"] if meta["parent_id"] != "" else None,
-                "chunk_id": meta["chunk_id"],
-                "is_parent": bool(meta["is_parent"]),
-                "token_count": int(meta["token_count"]),
-            }
+            Chunk(
+                doc_id=meta["doc_id"],
+                text=results["documents"][i],
+                section_id=meta["section"],
+                section_title=meta["section_title"],
+                chunk_index=int(meta["chunk_index"]),
+                keywords=kws,
+                raw_text=meta["raw_text"],
+                section=meta["section"],
+                page=int(meta["page"]),
+                parent_id=meta["parent_id"] if meta["parent_id"] != "" else None,
+                chunk_id=meta["chunk_id"],
+                is_parent=bool(meta["is_parent"]),
+                token_count=int(meta["token_count"]),
+            )
         )
 
-    sorted_indices = np.argsort([c["chunk_index"] for c in chunks])
+    sorted_indices = np.argsort([c.chunk_index for c in chunks])
     chunks = [chunks[idx] for idx in sorted_indices]
     embeddings = np.array([embeddings_list[idx] for idx in sorted_indices], dtype="float32")
 
@@ -446,7 +465,21 @@ def advanced_universal_retrieval(
         scores.append((final_score, i))
 
     scores.sort(reverse=True)
-    return [candidate_chunks[i] for _, i in scores[:final_k]]
+    retrieved_chunks = [candidate_chunks[i] for _, i in scores[:final_k]]
+
+    final_retrieved = []
+    for chunk in retrieved_chunks:
+        parent_id = chunk.get("parent_id")
+        if parent_id:
+            parent_text = get_parent(parent_id, doc_id)
+            if parent_text:
+                chunk_copy = chunk.copy()
+                chunk_copy["text"] = parent_text
+                final_retrieved.append(chunk_copy)
+                continue
+        final_retrieved.append(chunk)
+
+    return final_retrieved
 
 
 def get_adaptive_contextual_chunks(

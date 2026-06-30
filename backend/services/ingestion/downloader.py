@@ -12,7 +12,10 @@ logger = structlog.get_logger(__name__)
 
 def download_file(url: str, doc_id: str = "unknown") -> Tuple[str, str]:
     """Download a document URL to a unique temporary file."""
-    response = requests.get(url, stream=True)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    response = requests.get(url, headers=headers, stream=True)
     response.raise_for_status()
 
     parsed = urlparse(url)

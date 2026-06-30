@@ -4,12 +4,13 @@ import os
 import pickle
 from pathlib import Path
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 import unicodedata
 import numpy as np
 import structlog
 import tiktoken
 
+from models.domain import Chunk
 from services.ingestion.classifier import DocumentClassifier
 from services.ingestion.downloader import download_file
 from services.ingestion.parsers import (
@@ -606,9 +607,123 @@ def extract_universal_keywords(text: str, top_k: int = 12) -> List[str]:
     return top_words[:top_k]
 
 
+class ParentChildChunker:
+    def __init__(self, parent_size: int = 1500, child_size: int = 256, overlap: int = 32):
+        self.parent_size = parent_size
+        self.child_size = child_size
+        self.overlap = overlap
+
+    def chunk(self, text_or_sections: Any, doc_id: str, doc_type: str) -> List[Chunk]:
+        if isinstance(text_or_sections, str):
+            sections = [
+                {
+                    "section_id": "1",
+                    "section_title": "Content",
+                    "section_body": text_or_sections,
+                }
+            ]
+        else:
+            sections = text_or_sections
+
+        chunks = []
+        parent_index = 0
+        child_index = 0
+
+        for section in sections:
+            sec_id = section.get("section_id", "Unknown")
+            sec_title = section.get("section_title", "Untitled")
+            body = section.get("section_body", section.get("text", ""))
+
+            if not body or not body.strip():
+                continue
+
+            # Split the section into parent chunks of ~1500 tokens
+            # Split by double newline to respect semantic boundaries (paragraphs)
+            paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+            parent_texts = []
+            current_parent = ""
+            current_tokens = 0
+
+            for para in paragraphs:
+                para_tokens = len(tokenizer.encode(para))
+                if current_tokens + para_tokens > self.parent_size and current_parent:
+                    parent_texts.append(current_parent)
+                    current_parent = para
+                    current_tokens = para_tokens
+                else:
+                    current_parent = current_parent + "\n\n" + para if current_parent else para
+                    current_tokens += para_tokens
+
+            if current_parent:
+                parent_texts.append(current_parent)
+
+            # For each parent chunk text
+            for idx, p_text in enumerate(parent_texts):
+                p_chunk_id = f"parent_{doc_id}_{parent_index}"
+                parent_index += 1
+
+                # Create Parent Chunk
+                parent_chunk = Chunk(
+                    doc_id=doc_id,
+                    text=f"{sec_id} {sec_title}\n{p_text}",
+                    section_id=sec_id,
+                    section_title=sec_title,
+                    chunk_index=parent_index - 1,
+                    keywords=extract_universal_keywords(p_text),
+                    raw_text=p_text,
+                    section=sec_id,
+                    page=-1,
+                    parent_id=None,
+                    chunk_id=p_chunk_id,
+                    is_parent=True,
+                    token_count=len(tokenizer.encode(p_text)),
+                )
+                chunks.append(parent_chunk)
+
+                # Create Child Chunks
+                # Split parent text into child chunks of ~256 tokens, overlap=32
+                tokens = tokenizer.encode(p_text)
+                total_tokens = len(tokens)
+                start = 0
+
+                while start < total_tokens:
+                    end = min(start + self.child_size, total_tokens)
+                    child_tokens = tokens[start:end]
+                    child_text = tokenizer.decode(child_tokens)
+
+                    # Ensure child chunk text is not empty/whitespace
+                    if child_text.strip():
+                        c_chunk_id = f"child_{doc_id}_{child_index}"
+                        child_index += 1
+
+                        child_chunk = Chunk(
+                            doc_id=doc_id,
+                            text=f"{sec_id} {sec_title}\n{child_text}",
+                            section_id=sec_id,
+                            section_title=sec_title,
+                            chunk_index=child_index - 1,
+                            keywords=extract_universal_keywords(child_text),
+                            raw_text=child_text,
+                            section=sec_id,
+                            page=-1,
+                            parent_id=p_chunk_id,
+                            chunk_id=c_chunk_id,
+                            is_parent=False,
+                            token_count=len(child_tokens),
+                        )
+                        chunks.append(child_chunk)
+
+                    # Increment start position considering overlap
+                    if start + self.child_size >= total_tokens:
+                        break
+                    start += self.child_size - self.overlap
+
+        return chunks
+
+
 def load_or_create_chunks(
     file_url: str,
-) -> Tuple[List[Dict], np.ndarray, str, str]:
+) -> Tuple[List[Chunk], np.ndarray, str, str]:
     logger.info("legacy_log", message="🌍 [Universal RAG] Starting document processing")
     start_total = os.time() if hasattr(os, "time") else __import__("time").time()
 
@@ -631,10 +746,12 @@ def load_or_create_chunks(
     logger.info("legacy_log", message=f"🎯 Document type detected: {doc_type.upper()}")
 
     from services.retrieval.vector_store import get_chunks_from_store, store_chunks
+    import json
 
-    chunks, embeddings = get_chunks_from_store(doc_id)
+    child_chunks, embeddings = get_chunks_from_store(doc_id)
+    parents_path = CACHE_DIR / f"parents_{doc_id}.json"
 
-    if chunks and len(chunks) > 0:
+    if child_chunks and len(child_chunks) > 0 and parents_path.exists():
         logger.info(
             "legacy_log",
             message=f"✅ Using cached chunks and embeddings from ChromaDB for {file_url}",
@@ -648,15 +765,20 @@ def load_or_create_chunks(
         for section in sections:
             section["doc_id"] = doc_id
         logger.info("legacy_log", message=f"📄 Sections extracted: {len(sections)}")
-        chunks = universal_hybrid_chunking(sections, max_tokens=600, overlap_tokens=150, doc_type=doc_type)
 
-        for c in chunks:
-            c["doc_id"] = doc_id
-            if "keywords" not in c:
-                c["keywords"] = extract_universal_keywords(c.get("raw_text", c["text"]))
+        chunker = ParentChildChunker()
+        chunks = chunker.chunk(sections, doc_id, doc_type)
 
         logger.info("legacy_log", message=f"🧩 Chunks created: {len(chunks)}")
-        embeddings = embed_voyage([c["text"] for c in chunks])
+
+        parent_chunks = [c for c in chunks if c.is_parent]
+        child_chunks = [c for c in chunks if not c.is_parent]
+
+        parents_dict = {c.chunk_id: c.text for c in parent_chunks}
+        with open(parents_path, "w", encoding="utf-8") as f:
+            json.dump(parents_dict, f, ensure_ascii=False, indent=2)
+
+        embeddings = embed_voyage([c.text for c in child_chunks])
         store_chunks(doc_id, chunks, embeddings)
 
     duration = (os.time() if hasattr(os, "time") else __import__("time").time()) - start_total
@@ -664,4 +786,4 @@ def load_or_create_chunks(
         "legacy_log",
         message=f"⏱️ Total processing time: {duration:.2f} seconds",
     )
-    return chunks, embeddings, doc_id, doc_type
+    return child_chunks, embeddings, doc_id, doc_type
