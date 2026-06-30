@@ -750,12 +750,18 @@ def load_or_create_chunks(
 
     child_chunks, embeddings = get_chunks_from_store(doc_id)
     parents_path = CACHE_DIR / f"parents_{doc_id}.json"
+    bm25_path = CACHE_DIR / f"bm25_{doc_id}.pkl"
 
     if child_chunks and len(child_chunks) > 0 and parents_path.exists():
         logger.info(
             "legacy_log",
             message=f"✅ Using cached chunks and embeddings from ChromaDB for {file_url}",
         )
+        if not bm25_path.exists():
+            logger.info("legacy_log", message="⚡ BM25 index missing for cached document, building now...")
+            from services.retrieval.bm25_index import build_and_save_bm25_index
+
+            build_and_save_bm25_index(doc_id, [c.text for c in child_chunks])
     else:
         logger.info(
             "legacy_log",
@@ -780,6 +786,10 @@ def load_or_create_chunks(
 
         embeddings = embed_voyage([c.text for c in child_chunks])
         store_chunks(doc_id, chunks, embeddings)
+
+        from services.retrieval.bm25_index import build_and_save_bm25_index
+
+        build_and_save_bm25_index(doc_id, [c.text for c in child_chunks])
 
     duration = (os.time() if hasattr(os, "time") else __import__("time").time()) - start_total
     logger.info(

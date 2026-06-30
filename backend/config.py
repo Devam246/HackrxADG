@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     child_chunk_size: int = 256
     chunk_overlap: int = 32
 
+    rrf_k: int = 60
+    rrf_dense_weight: float = 0.7
+    rrf_sparse_weight: float = 0.3
+
     chroma_persist_dir: str = "./chroma_db"
     qdrant_url: str = ""
     qdrant_api_key: str = ""
