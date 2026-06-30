@@ -20,9 +20,10 @@ import pytest
 # ─────────────────────────────────────────────────────────────────────────────
 # Guards — skip the whole module if API key or deepeval are absent
 # ─────────────────────────────────────────────────────────────────────────────
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-_SKIP_REASON = "GEMINI_API_KEY not set — skipping live evaluation tests"
-_needs_api = pytest.mark.skipif(not GEMINI_API_KEY, reason=_SKIP_REASON)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+IS_VALID_KEY = len(GEMINI_API_KEY) > 5
+_SKIP_REASON = "GEMINI_API_KEY not set or too short — skipping live evaluation tests"
+_needs_api = pytest.mark.skipif(not IS_VALID_KEY, reason=_SKIP_REASON)
 
 try:
     from deepeval import assert_test
@@ -32,7 +33,7 @@ try:
         ContextualRecallMetric,
         FaithfulnessMetric,
     )
-    from deepeval.models.gpt_model import DeepEvalBaseLLM
+    from deepeval.models import DeepEvalBaseLLM
     from deepeval.test_case import LLMTestCase
     DEEPEVAL_AVAILABLE = True
 except ImportError:
@@ -51,12 +52,12 @@ except ImportError:
     RAGAS_AVAILABLE = False
 
 _needs_deepeval = pytest.mark.skipif(
-    not DEEPEVAL_AVAILABLE or not GEMINI_API_KEY,
-    reason="deepeval not installed or GEMINI_API_KEY not set",
+    not DEEPEVAL_AVAILABLE or not IS_VALID_KEY,
+    reason="deepeval not installed or GEMINI_API_KEY not set/invalid",
 )
 _needs_ragas = pytest.mark.skipif(
-    not RAGAS_AVAILABLE or not GEMINI_API_KEY,
-    reason="ragas not installed or GEMINI_API_KEY not set",
+    not RAGAS_AVAILABLE or not IS_VALID_KEY,
+    reason="ragas not installed or GEMINI_API_KEY not set/invalid",
 )
 
 
