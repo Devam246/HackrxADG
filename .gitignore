@@ -27,4 +27,6 @@ backend/chroma_db/
 backend/.pytest_cache/
 backend/.ruff_cache/
 backend/__pycache__/
-backend/tests/__pycache__/
+backend/tests/__pycache__/  
+AGENT.md
+docs/
