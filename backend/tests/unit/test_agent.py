@@ -13,6 +13,9 @@ import numpy as np
 import pytest
 
 from models.domain import Chunk
+import agent.rag_graph
+from agent.rag_graph import run_agentic_rag
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

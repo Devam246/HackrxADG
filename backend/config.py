@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     bearer_token: str = Field(validation_alias="HACKATHON_BEARER_TOKEN")
     gemini_api_key: str = Field(validation_alias="GEMINI_API_KEY")
     environment: str = Field(default="production", validation_alias="ENVIRONMENT")
+    eval_judge_provider: str = Field(default="gemini", validation_alias="EVAL_JUDGE_PROVIDER")
+    groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
+
 
     embedding_model: str = "gemini-embedding-001"
     llm_model: str = "gemini-2.5-flash"
