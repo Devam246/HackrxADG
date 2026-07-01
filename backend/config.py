@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     environment: str = Field(default="production", validation_alias="ENVIRONMENT")
     eval_judge_provider: str = Field(default="gemini", validation_alias="EVAL_JUDGE_PROVIDER")
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
+    cohere_api_key: str = Field(default="", validation_alias="COHERE_API_KEY")
 
 
     embedding_model: str = "gemini-embedding-001"

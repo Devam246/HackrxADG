@@ -3,18 +3,15 @@ from unittest.mock import MagicMock
 from models.domain import Chunk
 from services.retrieval.compressor import compress_chunks
 
+def make_mock_choice(text_content: str):
+    mock_choice = MagicMock()
+    mock_choice.message.content = text_content
+    return mock_choice
 
 def make_mock_response(text_content: str):
-    mock_part = MagicMock()
-    mock_part.text = text_content
-    mock_content = MagicMock()
-    mock_content.parts = [mock_part]
-    mock_candidate = MagicMock()
-    mock_candidate.content = mock_content
     mock_response = MagicMock()
-    mock_response.candidates = [mock_candidate]
+    mock_response.choices = [make_mock_choice(text_content)]
     return mock_response
-
 
 @pytest.fixture
 def sample_chunks():
@@ -66,21 +63,23 @@ def sample_chunks():
         ),
     ]
 
-
 def test_compress_chunks_success(mocker, sample_chunks):
-    # Mock Google GenAI model initialization and generate_content
-    mock_model = mocker.patch("google.generativeai.GenerativeModel")
+    mock_client = mocker.patch("groq.Groq")
+    mock_instance = mocker.MagicMock()
     
-    # Setup model to return success for all chunks
-    mock_model.return_value.generate_content.side_effect = [
-        make_mock_response("Premium is due monthly."),
-        make_mock_response("Grace period is 30 days."),
-        make_mock_response("Exclusions are sports and self-injury."),
-    ]
+    response_json = """[
+        {"index": 0, "compressed_text": "Premium is due monthly."},
+        {"index": 1, "compressed_text": "Grace period is 30 days."},
+        {"index": 2, "compressed_text": "Exclusions are sports and self-injury."}
+    ]"""
+    
+    mock_instance.chat.completions.create.return_value = make_mock_response(response_json)
+    mock_client.return_value = mock_instance
+
+    mocker.patch("services.retrieval.compressor.settings.groq_api_key", "test_key")
 
     result = compress_chunks("What is premium and grace period?", sample_chunks)
 
-    # 3 chunks compressed successfully, len >= 2 so no fallback
     assert len(result) == 3
     assert result[0].chunk_id == "c1"
     assert result[0].text == "Premium is due monthly."
@@ -91,18 +90,22 @@ def test_compress_chunks_success(mocker, sample_chunks):
 
 
 def test_compress_chunks_filtering_no_relevant(mocker, sample_chunks):
-    mock_model = mocker.patch("google.generativeai.GenerativeModel")
+    mock_client = mocker.patch("groq.Groq")
+    mock_instance = mocker.MagicMock()
     
-    # First two chunks return valid text, third returns NO_RELEVANT_CONTENT
-    mock_model.return_value.generate_content.side_effect = [
-        make_mock_response("Premium is due monthly."),
-        make_mock_response("Grace period is 30 days."),
-        make_mock_response("NO_RELEVANT_CONTENT"),
-    ]
+    response_json = """[
+        {"index": 0, "compressed_text": "Premium is due monthly."},
+        {"index": 1, "compressed_text": "Grace period is 30 days."},
+        {"index": 2, "compressed_text": "NO_RELEVANT_CONTENT"}
+    ]"""
+    
+    mock_instance.chat.completions.create.return_value = make_mock_response(response_json)
+    mock_client.return_value = mock_instance
+
+    mocker.patch("services.retrieval.compressor.settings.groq_api_key", "test_key")
 
     result = compress_chunks("What is premium and grace period?", sample_chunks)
 
-    # c3 is filtered out. Remaining are c1 and c2. Since len([c1, c2]) == 2 (>= 2), we keep them and don't fallback.
     assert len(result) == 2
     assert result[0].chunk_id == "c1"
     assert result[0].text == "Premium is due monthly."
@@ -111,34 +114,39 @@ def test_compress_chunks_filtering_no_relevant(mocker, sample_chunks):
 
 
 def test_compress_chunks_fallback_fewer_than_two(mocker, sample_chunks):
-    mock_model = mocker.patch("google.generativeai.GenerativeModel")
+    mock_client = mocker.patch("groq.Groq")
+    mock_instance = mocker.MagicMock()
     
-    # Only one chunk survives, other two return NO_RELEVANT_CONTENT
-    mock_model.return_value.generate_content.side_effect = [
-        make_mock_response("Premium is due monthly."),
-        make_mock_response("NO_RELEVANT_CONTENT"),
-        make_mock_response("NO_RELEVANT_CONTENT"),
-    ]
+    response_json = """[
+        {"index": 0, "compressed_text": "Premium is due monthly."},
+        {"index": 1, "compressed_text": "NO_RELEVANT_CONTENT"},
+        {"index": 2, "compressed_text": "NO_RELEVANT_CONTENT"}
+    ]"""
+    
+    mock_instance.chat.completions.create.return_value = make_mock_response(response_json)
+    mock_client.return_value = mock_instance
+
+    mocker.patch("services.retrieval.compressor.settings.groq_api_key", "test_key")
 
     result = compress_chunks("What is premium?", sample_chunks)
 
-    # Since only 1 survived (c1), which is < 2, we fallback to the first 2 original chunks (uncompressed)
     assert len(result) == 2
     assert result[0].chunk_id == "c1"
-    assert result[0].text == sample_chunks[0].text  # uncompressed original text
+    assert result[0].text == sample_chunks[0].text
     assert result[1].chunk_id == "c2"
-    assert result[1].text == sample_chunks[1].text  # uncompressed original text
+    assert result[1].text == sample_chunks[1].text
 
 
 def test_compress_chunks_api_failure_fallback(mocker, sample_chunks):
-    mock_model = mocker.patch("google.generativeai.GenerativeModel")
-    
-    # Raise exception for all calls
-    mock_model.return_value.generate_content.side_effect = Exception("Gemini API Overloaded")
+    mock_client = mocker.patch("groq.Groq")
+    mock_instance = mocker.MagicMock()
+    mock_instance.chat.completions.create.side_effect = Exception("Groq failure")
+    mock_client.return_value = mock_instance
+
+    mocker.patch("services.retrieval.compressor.settings.groq_api_key", "test_key")
 
     result = compress_chunks("What is premium?", sample_chunks)
 
-    # Since all failed, 0 survived, which is < 2. Falls back to first 2 original chunks.
     assert len(result) == 2
     assert result[0].chunk_id == "c1"
     assert result[0].text == sample_chunks[0].text

@@ -1,91 +1,55 @@
-from functools import lru_cache
-from typing import List, Optional
-import structlog
-
+import os
+import cohere
+from typing import List
 from config import get_settings
 from models.domain import Chunk
+import structlog
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 
-@lru_cache(maxsize=1)
-def get_reranker_model(model_name: str):
-    """
-    Lazy load the BAAI/bge-reranker-v2-m3 cross-encoder model.
-    Loads using sentence-transformers or FlagEmbedding.
-    Attempts to use CUDA and FP16/float16 if GPU is available.
-    """
-    try:
-        import torch
-
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info("loading_reranker_model", model_name=model_name, device=device)
-
-        # 1. Attempt using sentence-transformers
-        try:
-            from sentence_transformers import CrossEncoder
-
-            automodel_args = {}
-            if device == "cuda":
-                automodel_args["torch_dtype"] = torch.float16
-
-            model = CrossEncoder(
-                model_name,
-                device=device,
-                automodel_args=automodel_args,
-            )
-            logger.info("reranker_model_loaded_sentence_transformers", device=device)
-            return model
-        except ImportError:
-            # 2. Fall back to FlagEmbedding's FlagReranker
-            from FlagEmbedding import FlagReranker
-
-            use_fp16 = torch.cuda.is_available()
-            model = FlagReranker(model_name, use_fp16=use_fp16)
-            logger.info("reranker_model_loaded_flagembedding", use_fp16=use_fp16)
-            return model
-
-    except Exception as e:
-        logger.exception("reranker_model_load_failed", model_name=model_name, error=str(e))
-        return None
-
-
 class CrossEncoderReranker:
     """
-    CrossEncoderReranker handles scoring search candidates against the original query.
-    Falls back to original ordering if model loading or scoring fails.
+    CrossEncoderReranker handles scoring search candidates against the original query
+    using Cohere's Rerank API.
+    Falls back to RRF-only ordering if the Cohere API key is missing or call fails.
     """
 
     def rerank(self, query: str, chunks: List[Chunk], top_n: int = 8) -> List[Chunk]:
         """
-        Scores input chunks against the query using BAAI/bge-reranker-v2-m3.
+        Scores input chunks against the query using Cohere's Rerank API.
         Keeps top_n scored chunks.
         """
         if not chunks:
             return []
 
-        model = get_reranker_model(settings.reranker_model)
-        if model is None:
+        api_key = settings.cohere_api_key or os.environ.get("COHERE_API_KEY", "")
+        if not api_key:
             logger.warning("reranker_model_not_loaded_falling_back_to_rrf")
             for chunk in chunks:
                 chunk.rerank_score = None
             return chunks[:top_n]
 
         try:
-            pairs = [(query, chunk.text) for chunk in chunks]
+            co = cohere.ClientV2(api_key=api_key)
+            documents = [chunk.text for chunk in chunks]
 
-            # Run predictions depending on loaded model type
-            if hasattr(model, "predict"):
-                scores = model.predict(pairs)
-            else:
-                scores = model.compute_score(pairs)
+            response = co.rerank(
+                model="rerank-v3.5",
+                query=query,
+                documents=documents,
+                top_n=top_n
+            )
 
-            # Assign float scores to chunk copies
-            for chunk, score in zip(chunks, scores):
-                chunk.rerank_score = float(score)
+            score_map = {res.index: res.relevance_score for res in response.results}
 
-            # Sort descending by score. If a score is missing/None (should not happen), treat as very low.
+            for idx, chunk in enumerate(chunks):
+                if idx in score_map:
+                    chunk.rerank_score = float(score_map[idx])
+                else:
+                    chunk.rerank_score = -999999.0
+
             reranked = sorted(
                 chunks,
                 key=lambda x: x.rerank_score if x.rerank_score is not None else -999999.0,
@@ -104,3 +68,4 @@ class CrossEncoderReranker:
             for chunk in chunks:
                 chunk.rerank_score = None
             return chunks[:top_n]
+

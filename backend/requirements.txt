@@ -136,5 +136,5 @@ pydantic-settings==2.6.1
 chromadb==1.5.9
 rank-bm25==0.2.2
 langgraph==1.2.7
-
-
+groq==0.37.1
+cohere==5.13.11

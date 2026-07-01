@@ -27,36 +27,44 @@ gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> List[str]:
     """
-    Enhanced Gemini API call with robust JSON parsing, fallback mechanisms,
+    Enhanced Groq API call with robust JSON parsing, fallback mechanisms,
     and exponential backoff retry logic for 429 rate limit exceptions.
     """
-    import google.api_core.exceptions
+    import os
+    import groq
     import time
     import re
 
     max_retries = 3
     backoff = 2.0
 
+    api_key = settings.groq_api_key or os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        logger.warning("groq_api_key_missing_generation_fallback")
+        return ["Error: Groq API key is missing"] * 10
+
+    client = groq.Groq(api_key=api_key)
+
     for attempt in range(max_retries):
         try:
             full_prompt = f"{system}\n\n{user}"
 
-            response = gemini_model.generate_content(
-                contents=[full_prompt],
-                generation_config={
-                    "temperature": 0.1,
-                    "max_output_tokens": max_output_tokens,
-                    "top_p": 0.8,
-                    "top_k": 40,
-                },
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "user", "content": full_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=max_output_tokens,
+                top_p=0.8,
             )
 
-            if not response.candidates:
-                raise Exception("No response candidates from Gemini")
+            if not response.choices or not response.choices[0].message.content:
+                raise Exception("No response choices from Groq")
 
-            content = response.candidates[0].content.parts[0].text.strip()
+            content = response.choices[0].message.content.strip()
             print("\n" + "="*80)
-            print("[RAW GEMINI RESPONSE] (attempt {}):\n{}".format(attempt + 1, content))
+            print("[RAW GROQ RESPONSE] (attempt {}):\n{}".format(attempt + 1, content))
             print("="*80 + "\n")
             parsed_answers = parse_json_response(content)
 
@@ -70,18 +78,35 @@ def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> L
                 if attempt < max_retries - 1:
                     time.sleep(backoff)
                     backoff *= 2.0
-        except google.api_core.exceptions.ResourceExhausted as e:
+        except groq.RateLimitError as e:
             if attempt == max_retries - 1:
-                logger.exception("gemini_generation_failed_exhausted", error=str(e))
+                logger.exception("groq_generation_failed_exhausted", error=str(e))
                 return extract_answers_fallback(content if "content" in locals() else "")
 
             err_msg = str(e)
-            match = re.search(r"Please retry in ([0-9.]+)s", err_msg)
+            wait_seconds = backoff
+            match = re.search(r"(?:retry|try again) in ([0-9.]+)(m?s)", err_msg, re.IGNORECASE)
             if match:
-                wait_seconds = float(match.group(1)) + 1.5
+                value = float(match.group(1))
+                unit = match.group(2)
+                if unit == "ms":
+                    wait_seconds = (value / 1000.0) + 1.5
+                else:
+                    wait_seconds = value + 1.5
             else:
-                wait_seconds = backoff
-                backoff *= 2.0
+                time_str_match = re.search(r"in\s+([0-9hm\.]+s)", err_msg, re.IGNORECASE)
+                if time_str_match:
+                    time_str = time_str_match.group(1).rstrip(".")
+                    if "m" in time_str:
+                        parts = time_str.split("m")
+                        minutes = float(parts[0])
+                        seconds = float(parts[1].replace("s", ""))
+                        wait_seconds = minutes * 60.0 + seconds + 1.5
+                    else:
+                        seconds = float(time_str.replace("s", ""))
+                        wait_seconds = seconds + 1.5
+                else:
+                    backoff *= 2.0
 
             logger.warning(
                 "gemini_generation_rate_limit_hit_retrying",
@@ -91,6 +116,14 @@ def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> L
             )
             time.sleep(wait_seconds)
         except Exception as e:
+            if getattr(e, 'status_code', None) == 429:
+                if attempt == max_retries - 1:
+                    logger.exception("groq_generation_failed_exhausted", error=str(e))
+                    return extract_answers_fallback(content if "content" in locals() else "")
+                time.sleep(backoff)
+                backoff *= 2.0
+                continue
+
             logger.info("legacy_log", message=f"⚠️ Attempt {attempt + 1} failed: {str(e)}")
             if attempt == max_retries - 1:
                 logger.info("legacy_log", message="🔴 All attempts failed, using fallback extraction")

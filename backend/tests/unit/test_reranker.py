@@ -1,30 +1,30 @@
+import os
 import sys
-from unittest.mock import MagicMock
-
-# Ensure sentence_transformers and FlagEmbedding are mockable
-if "torch" not in sys.modules:
-    mock_torch = MagicMock()
-    mock_torch.cuda.is_available.return_value = False
-    sys.modules["torch"] = mock_torch
-if "sentence_transformers" not in sys.modules:
-    sys.modules["sentence_transformers"] = MagicMock()
-if "FlagEmbedding" not in sys.modules:
-    sys.modules["FlagEmbedding"] = MagicMock()
-
+from unittest.mock import MagicMock, patch
 import pytest
-from services.retrieval.reranker import CrossEncoderReranker, get_reranker_model
+from services.retrieval.reranker import CrossEncoderReranker
 from models.domain import Chunk
 
+def test_reranker_success_cohere(mocker):
+    # Mock Cohere ClientV2 and its rerank response
+    mock_client = mocker.patch("cohere.ClientV2")
+    mock_instance = mocker.MagicMock()
+    
+    mock_result_0 = mocker.MagicMock()
+    mock_result_0.index = 2
+    mock_result_0.relevance_score = 0.99
+    
+    mock_result_1 = mocker.MagicMock()
+    mock_result_1.index = 0
+    mock_result_1.relevance_score = 0.85
+    
+    mock_response = mocker.MagicMock()
+    mock_response.results = [mock_result_0, mock_result_1]
+    
+    mock_instance.rerank.return_value = mock_response
+    mock_client.return_value = mock_instance
 
-def test_reranker_success_sentence_transformers(mocker):
-    # Clear the lru cache to ensure new mock is registered
-    get_reranker_model.cache_clear()
-
-    # Mock sentence_transformers CrossEncoder loading
-    mock_cross_encoder = mocker.patch("sentence_transformers.CrossEncoder")
-    mock_model_instance = mocker.MagicMock()
-    mock_model_instance.predict.return_value = [0.85, 0.12, 0.99]
-    mock_cross_encoder.return_value = mock_model_instance
+    mocker.patch("services.retrieval.reranker.settings.cohere_api_key", "test_key")
 
     reranker = CrossEncoderReranker()
     chunks = [
@@ -78,19 +78,15 @@ def test_reranker_success_sentence_transformers(mocker):
     result = reranker.rerank("query text", chunks, top_n=2)
 
     assert len(result) == 2
-    # Sorted by score descending: c3 (0.99) -> c1 (0.85) -> c2 (0.12, cut off by top_n=2)
     assert result[0].chunk_id == "c3"
     assert result[0].rerank_score == 0.99
     assert result[1].chunk_id == "c1"
     assert result[1].rerank_score == 0.85
 
 
-def test_reranker_load_failure_fallback(mocker):
-    get_reranker_model.cache_clear()
-
-    # Force import or initialization failure
-    mocker.patch("sentence_transformers.CrossEncoder", side_effect=Exception("Load failed"))
-    mocker.patch("FlagEmbedding.FlagReranker", side_effect=Exception("Load failed"))
+def test_reranker_key_missing_fallback(mocker):
+    mocker.patch("services.retrieval.reranker.settings.cohere_api_key", "")
+    mocker.patch.dict("os.environ", {}, clear=True)
 
     reranker = CrossEncoderReranker()
     chunks = [
@@ -128,7 +124,6 @@ def test_reranker_load_failure_fallback(mocker):
 
     result = reranker.rerank("query text", chunks, top_n=2)
 
-    # Verify fallback to original ordering
     assert len(result) == 2
     assert result[0].chunk_id == "c1"
     assert result[1].chunk_id == "c2"
@@ -136,12 +131,12 @@ def test_reranker_load_failure_fallback(mocker):
 
 
 def test_reranker_inference_failure_fallback(mocker):
-    get_reranker_model.cache_clear()
+    mock_client = mocker.patch("cohere.ClientV2")
+    mock_instance = mocker.MagicMock()
+    mock_instance.rerank.side_effect = Exception("API call failed")
+    mock_client.return_value = mock_instance
 
-    mock_cross_encoder = mocker.patch("sentence_transformers.CrossEncoder")
-    mock_model_instance = mocker.MagicMock()
-    mock_model_instance.predict.side_effect = Exception("Inference failed")
-    mock_cross_encoder.return_value = mock_model_instance
+    mocker.patch("services.retrieval.reranker.settings.cohere_api_key", "test_key")
 
     reranker = CrossEncoderReranker()
     chunks = [
@@ -179,7 +174,6 @@ def test_reranker_inference_failure_fallback(mocker):
 
     result = reranker.rerank("query text", chunks, top_n=2)
 
-    # Verify fallback to original ordering on inference error
     assert len(result) == 2
     assert result[0].chunk_id == "c1"
     assert result[1].chunk_id == "c2"
