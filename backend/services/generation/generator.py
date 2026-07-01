@@ -3,7 +3,6 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import re
 from typing import Dict, List, Tuple
-import google.generativeai as genai
 import numpy as np
 import structlog
 
@@ -20,9 +19,7 @@ from services.retrieval.vector_store import advanced_universal_retrieval
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
-# Configure Gemini
-genai.configure(api_key=settings.gemini_api_key)
-gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
 
 
 def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> List[str]:
@@ -109,7 +106,7 @@ def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> L
                     backoff *= 2.0
 
             logger.warning(
-                "gemini_generation_rate_limit_hit_retrying",
+                "groq_generation_rate_limit_hit_retrying",
                 attempt=attempt + 1,
                 wait_seconds=round(wait_seconds, 2),
                 error=err_msg,

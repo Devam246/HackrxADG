@@ -7,8 +7,7 @@ Max 2 rewrite cycles before forcing generation with needs_human_review=True.
 
 from typing import List, Optional, TypedDict
 
-import google.api_core.exceptions
-import google.generativeai as genai
+import groq
 import numpy as np
 import re
 import structlog
@@ -59,35 +58,81 @@ class AgentState(TypedDict):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _call_gemini_text(prompt: str, temperature: float = 0.0,
-                      max_output_tokens: int = 200) -> Optional[str]:
-    """Low-level helper: call Gemini and return raw text, or None on failure."""
+def _call_groq_text(prompt: str, temperature: float = 0.0,
+                    max_output_tokens: int = 200) -> Optional[str]:
+    """Low-level helper: call Groq (llama-3.3-70b-versatile) and return raw text, or None on failure."""
+    import os
+    import groq
+
+    api_key = settings.groq_api_key or os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        logger.warning("groq_api_key_missing_agent_fallback")
+        return None
+
+    client = groq.Groq(api_key=api_key)
     backoff = 2.0
-    for attempt in range(3):
+    max_attempts = 3
+
+    for attempt in range(max_attempts):
         try:
-            genai.configure(api_key=settings.gemini_api_key)
-            model = genai.GenerativeModel(settings.llm_model)
-            response = model.generate_content(
-                contents=[prompt],
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_output_tokens,
-                },
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=temperature,
+                max_tokens=max_output_tokens,
             )
-            if response.candidates and response.candidates[0].content.parts:
-                return response.candidates[0].content.parts[0].text.strip()
+            if response.choices and response.choices[0].message.content:
+                return response.choices[0].message.content.strip()
             return None
-        except google.api_core.exceptions.ResourceExhausted as e:
-            if attempt == 2:
-                logger.exception("gemini_rate_limit_exhausted", error=str(e))
+        except groq.RateLimitError as e:
+            if attempt == max_attempts - 1:
+                logger.exception("agent_groq_call_failed_exhausted", error=str(e))
                 return None
+
             err_msg = str(e)
-            match = re.search(r"Please retry in ([0-9.]+)s", err_msg)
-            wait = float(match.group(1)) + 1.5 if match else backoff
-            backoff *= 2.0
-            time.sleep(wait)
+            wait_seconds = backoff
+            match = re.search(r"(?:retry|try again) in ([0-9.]+)(m?s)", err_msg, re.IGNORECASE)
+            if match:
+                value = float(match.group(1))
+                unit = match.group(2)
+                if unit == "ms":
+                    wait_seconds = (value / 1000.0) + 1.5
+                else:
+                    wait_seconds = value + 1.5
+            else:
+                time_str_match = re.search(r"in\s+([0-9hm\.]+s)", err_msg, re.IGNORECASE)
+                if time_str_match:
+                    time_str = time_str_match.group(1).rstrip(".")
+                    if "m" in time_str:
+                        parts = time_str.split("m")
+                        minutes = float(parts[0])
+                        seconds = float(parts[1].replace("s", ""))
+                        wait_seconds = minutes * 60.0 + seconds + 1.5
+                    else:
+                        seconds = float(time_str.replace("s", ""))
+                        wait_seconds = seconds + 1.5
+                else:
+                    backoff *= 2.0
+
+            logger.warning(
+                "agent_rate_limit_hit_retrying",
+                attempt=attempt + 1,
+                wait_seconds=round(wait_seconds, 2),
+                error=err_msg,
+            )
+            time.sleep(wait_seconds)
         except Exception as e:
-            logger.exception("gemini_call_failed", error=str(e))
+            if getattr(e, 'status_code', None) == 429:
+                if attempt == max_attempts - 1:
+                    logger.exception("agent_groq_call_failed_exhausted", error=str(e))
+                    return None
+                time.sleep(backoff)
+                backoff *= 2.0
+                continue
+
+            logger.exception("agent_groq_call_failed", error=str(e))
             return None
     return None
 
@@ -163,7 +208,7 @@ def node_grade_context(state: AgentState) -> AgentState:
         context=context_text,
     )
 
-    raw = _call_gemini_text(prompt, temperature=0.0, max_output_tokens=5)
+    raw = _call_groq_text(prompt, temperature=0.0, max_output_tokens=5)
     verdict = (raw or "NO").strip().upper()
     enough = verdict.startswith("YES")
 
@@ -195,7 +240,7 @@ def node_rewrite(state: AgentState) -> AgentState:
                 rewrite_count=rewrite_count)
 
     prompt = REWRITE_PROMPT.format(question=state["query"])
-    rewritten = _call_gemini_text(prompt, temperature=0.3, max_output_tokens=150)
+    rewritten = _call_groq_text(prompt, temperature=0.3, max_output_tokens=150)
 
     new_query = rewritten.strip() if rewritten else state["query"]
     logger.info("agent_rewrite_result", new_query=new_query)
@@ -236,6 +281,16 @@ def node_generate(state: AgentState) -> AgentState:
     final_chunks = compress_chunks(state["original_query"], state["retrieved_chunks"])
     orig_tokens = getattr(final_chunks, "_original_tokens", 0)
     final_tokens_count = getattr(final_chunks, "_final_tokens", 0)
+
+    if not final_chunks:
+        logger.warning("agent_generate_empty_context")
+        return {
+            **state,
+            "answer": "Insufficient information to answer this question.",
+            "needs_human_review": True,
+            "original_tokens": 0,
+            "final_tokens": 0,
+        }
 
     system, user_prompt = build_universal_prompt(
         [state["original_query"]],

@@ -111,7 +111,7 @@ def compress_single_chunk(query: str, chunk: Chunk, client) -> Optional[Chunk]:
     return None
 
 
-def compress_chunks_batched(query: str, chunks: List[Chunk], client) -> List[Optional[Chunk]]:
+def compress_chunks_batched(query: str, chunks: List[Chunk], client) -> Optional[List[Optional[Chunk]]]:
     """Compresses all chunks in a single batched API call to Groq."""
     backoff = 2.0
     max_attempts = 3
@@ -119,7 +119,8 @@ def compress_chunks_batched(query: str, chunks: List[Chunk], client) -> List[Opt
     # Format the prompt
     prompt = f'Compress the following policy excerpts to answer the query: "{query}"\n\n'
     prompt += 'For each excerpt, extract ONLY the sentences that directly answer the query. If none are relevant, return "NO_RELEVANT_CONTENT" for that excerpt.\n\n'
-    prompt += 'You MUST output your response strictly as a JSON array of objects with the keys "index" and "compressed_text". Do not include any other markdown formatting outside of the JSON block.\n\n'
+    prompt += 'You MUST output your response strictly as a JSON array of objects, where each object has exactly two keys: "index" (the integer index of the excerpt) and "compressed_text" (the extracted text or "NO_RELEVANT_CONTENT").\n'
+    prompt += 'Do not include any prose, commentary, explanation, or markdown formatting outside of the JSON block.\n\n'
     prompt += 'Example format:\n'
     prompt += '[\n  {"index": 0, "compressed_text": "extracted text"},\n  {"index": 1, "compressed_text": "NO_RELEVANT_CONTENT"}\n]\n\n'
     prompt += 'Excerpts to compress:\n'
@@ -138,6 +139,8 @@ def compress_chunks_batched(query: str, chunks: List[Chunk], client) -> List[Opt
             )
 
             content = response.choices[0].message.content.strip()
+            logger.info("batched_compression_raw_response", content=content)
+
             # Clean JSON markdown if present
             cleaned = re.sub(r"^```(?:json)?\s*", "", content, flags=re.MULTILINE)
             cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
@@ -152,29 +155,86 @@ def compress_chunks_batched(query: str, chunks: List[Chunk], client) -> List[Opt
             elif isinstance(parsed, dict) and "answers" in parsed:
                 parsed = parsed["answers"]
                 
-            if not isinstance(parsed, list):
-                raise ValueError("Expected a list of compressed excerpts")
+            if not isinstance(parsed, (list, dict)):
+                raise ValueError("Expected a list or dict of compressed excerpts")
 
             # Match them back by index
             results = [None] * len(chunks)
-            for item in parsed:
-                idx = int(item.get("index", -1))
-                comp_text = item.get("compressed_text", "").strip()
-                if 0 <= idx < len(chunks) and comp_text:
-                    if "NO_RELEVANT_CONTENT" in comp_text or comp_text.upper() == "NO_RELEVANT_CONTENT":
-                        results[idx] = None
-                    else:
-                        chunk_copy = chunks[idx].copy()
-                        chunk_copy.text = comp_text
-                        results[idx] = chunk_copy
+            non_none_count = 0
+            compressed_texts = []
 
-            logger.info("batched_compression_success", original_chunks=len(chunks), parsed_items=len(parsed))
+            # Handle if the model returned a dict instead of a list
+            if isinstance(parsed, dict):
+                temp_list = []
+                for k, v in parsed.items():
+                    try:
+                        k_int = int(k)
+                        if isinstance(v, str):
+                            temp_list.append({"index": k_int, "compressed_text": v})
+                        elif isinstance(v, dict):
+                            v_copy = v.copy()
+                            v_copy["index"] = k_int
+                            temp_list.append(v_copy)
+                    except (ValueError, TypeError):
+                        pass
+                if temp_list:
+                    parsed = temp_list
+
+            # Handle if the model returned a list of strings directly
+            if isinstance(parsed, list) and len(parsed) == len(chunks) and all(isinstance(x, str) for x in parsed):
+                for idx, comp_text in enumerate(parsed):
+                    comp_text = comp_text.strip()
+                    if comp_text:
+                        if "NO_RELEVANT_CONTENT" in comp_text or comp_text.upper() == "NO_RELEVANT_CONTENT":
+                            results[idx] = None
+                        else:
+                            chunk_copy = chunks[idx].copy()
+                            chunk_copy.text = comp_text
+                            results[idx] = chunk_copy
+                            non_none_count += 1
+                            compressed_texts.append(comp_text)
+            else:
+                for item in parsed:
+                    if isinstance(item, dict):
+                        idx_val = item.get("index")
+                        if idx_val is None:
+                            idx_val = item.get("idx")
+                        if idx_val is None:
+                            idx_val = item.get("id")
+
+                        try:
+                            idx = int(idx_val) if idx_val is not None else -1
+                        except (ValueError, TypeError):
+                            idx = -1
+
+                        comp_text = (
+                            item.get("compressed_text") or
+                            item.get("compressed") or
+                            item.get("text") or
+                            item.get("content") or
+                            item.get("extracted_text") or
+                            ""
+                        ).strip()
+                    else:
+                        continue
+
+                    if 0 <= idx < len(chunks) and comp_text:
+                        if "NO_RELEVANT_CONTENT" in comp_text or comp_text.upper() == "NO_RELEVANT_CONTENT":
+                            results[idx] = None
+                        else:
+                            chunk_copy = chunks[idx].copy()
+                            chunk_copy.text = comp_text
+                            results[idx] = chunk_copy
+                            non_none_count += 1
+                            compressed_texts.append(comp_text)
+
+            logger.info("batched_compression_success", original_chunks=len(chunks), parsed_items=len(parsed), non_none_chunks=non_none_count, compressed_texts=compressed_texts)
             return results
 
         except groq.RateLimitError as e:
             if attempt == max_attempts - 1:
                 logger.exception("batched_compression_rate_limit_failed", error=str(e))
-                return [None] * len(chunks)
+                return None
 
             err_msg = str(e)
             wait_seconds = backoff
@@ -213,15 +273,15 @@ def compress_chunks_batched(query: str, chunks: List[Chunk], client) -> List[Opt
             if getattr(e, 'status_code', None) == 429:
                 if attempt == max_attempts - 1:
                     logger.exception("batched_compression_rate_limit_failed", error=str(e))
-                    return [None] * len(chunks)
+                    return None
                 time.sleep(backoff)
                 backoff *= 2.0
                 continue
 
             logger.exception("batched_compression_failed", error=str(e))
-            return [None] * len(chunks)
+            return None
 
-    return [None] * len(chunks)
+    return None
 
 
 def compress_chunks(query: str, chunks: List[Chunk]) -> List[Chunk]:
@@ -243,9 +303,8 @@ def compress_chunks(query: str, chunks: List[Chunk]) -> List[Chunk]:
     # Attempt batched compression
     try:
         results = compress_chunks_batched(query, chunks, client)
-        if all(r is None for r in results) and len(chunks) > 0:
-            logger.warning("batched_compression_returned_all_none_trying_fallback")
-            results = None
+        if results is not None and all(r is None for r in results) and len(chunks) > 0:
+            logger.warning("batched_compression_all_chunks_irrelevant", query=query, num_chunks=len(chunks))
     except Exception as e:
         logger.warning("batched_compression_exception_trying_fallback", error=str(e))
         results = None

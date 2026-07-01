@@ -92,7 +92,7 @@ def test_agent_direct_path_sufficient_context(mocker, sample_state):
     )
     # Grader returns YES
     mocker.patch(
-        "agent.rag_graph._call_gemini_text",
+        "agent.rag_graph._call_groq_text",
         return_value="YES",
     )
     compressed = [make_chunk("c1", text="Waiting period is 36 months.")]
@@ -149,16 +149,16 @@ def test_agent_rewrite_cycle_then_success(mocker, sample_state):
     )
 
     # Grader: first call → NO, second call (after rewrite) → YES
-    # Rewriter call is a separate call to _call_gemini_text; distinguish by call count
+    # Rewriter call is a separate call to _call_groq_text; distinguish by call count
     call_count = {"n": 0}
-    def _gemini_side_effect(prompt, **kwargs):
+    def _groq_side_effect(prompt, **kwargs):
         if "Respond with only: YES or NO" in prompt:
             call_count["n"] += 1
             return "YES" if call_count["n"] > 1 else "NO"
         # rewrite prompt
         return "What is the deferment period for coverage?"
 
-    mocker.patch("agent.rag_graph._call_gemini_text", side_effect=_gemini_side_effect)
+    mocker.patch("agent.rag_graph._call_groq_text", side_effect=_groq_side_effect)
 
     compressed = [make_chunk("c1", text="Deferment period is 2 years.")]
     mocker.patch("agent.rag_graph.compress_chunks", return_value=compressed)
@@ -206,12 +206,12 @@ def test_agent_exhausted_rewrites_triggers_human_review(mocker, sample_state):
         return_value=0.30,
     )
 
-    def _gemini_side_effect(prompt, **kwargs):
+    def _groq_side_effect(prompt, **kwargs):
         if "Respond with only: YES or NO" in prompt:
             return "NO"   # grader always says NO
         return "Rewritten query for insurance terminology"
 
-    mocker.patch("agent.rag_graph._call_gemini_text", side_effect=_gemini_side_effect)
+    mocker.patch("agent.rag_graph._call_groq_text", side_effect=_groq_side_effect)
 
     compressed = [make_chunk("c1", text="Best available answer."), make_chunk("c2")]
     mocker.patch("agent.rag_graph.compress_chunks", return_value=compressed)
