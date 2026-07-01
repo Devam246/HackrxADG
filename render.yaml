@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: policymind-ai
+    runtime: python
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.3
+      - key: ENVIRONMENT
+        value: production
+      - key: HACKATHON_BEARER_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: EVAL_JUDGE_PROVIDER
+        value: groq

@@ -27,9 +27,15 @@ gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 
 def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> List[str]:
     """
-    Enhanced Gemini API call with robust JSON parsing and fallback mechanisms
+    Enhanced Gemini API call with robust JSON parsing, fallback mechanisms,
+    and exponential backoff retry logic for 429 rate limit exceptions.
     """
+    import google.api_core.exceptions
+    import time
+    import re
+
     max_retries = 3
+    backoff = 2.0
 
     for attempt in range(max_retries):
         try:
@@ -49,6 +55,9 @@ def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> L
                 raise Exception("No response candidates from Gemini")
 
             content = response.candidates[0].content.parts[0].text.strip()
+            print("\n" + "="*80)
+            print("[RAW GEMINI RESPONSE] (attempt {}):\n{}".format(attempt + 1, content))
+            print("="*80 + "\n")
             parsed_answers = parse_json_response(content)
 
             if parsed_answers:
@@ -58,13 +67,40 @@ def batch_llm_answer(system: str, user: str, max_output_tokens: int = 2048) -> L
                     "legacy_log",
                     message=f"⚠️ Attempt {attempt + 1}: Failed to parse JSON, retrying...",
                 )
+                if attempt < max_retries - 1:
+                    time.sleep(backoff)
+                    backoff *= 2.0
+        except google.api_core.exceptions.ResourceExhausted as e:
+            if attempt == max_retries - 1:
+                logger.exception("gemini_generation_failed_exhausted", error=str(e))
+                return extract_answers_fallback(content if "content" in locals() else "")
+
+            err_msg = str(e)
+            match = re.search(r"Please retry in ([0-9.]+)s", err_msg)
+            if match:
+                wait_seconds = float(match.group(1)) + 1.5
+            else:
+                wait_seconds = backoff
+                backoff *= 2.0
+
+            logger.warning(
+                "gemini_generation_rate_limit_hit_retrying",
+                attempt=attempt + 1,
+                wait_seconds=round(wait_seconds, 2),
+                error=err_msg,
+            )
+            time.sleep(wait_seconds)
         except Exception as e:
             logger.info("legacy_log", message=f"⚠️ Attempt {attempt + 1} failed: {str(e)}")
             if attempt == max_retries - 1:
                 logger.info("legacy_log", message="🔴 All attempts failed, using fallback extraction")
                 return extract_answers_fallback(content if "content" in locals() else "")
 
+            time.sleep(backoff)
+            backoff *= 2.0
+
     return ["Error: Could not generate response"] * 10
+
 
 
 def universal_query_expansion(query: str, doc_type: str) -> str:

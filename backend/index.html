@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PolicyMind AI - Document Intelligence</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                        outfit: ['Outfit', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            deep: '#0F172A',
+                            card: '#1E293B',
+                            accent: '#6366F1',
+                            accentHover: '#4F46E5',
+                            neonGreen: '#10B981',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.15), transparent 40%),
+                        radial-gradient(circle at bottom left, rgba(16, 185, 129, 0.08), transparent 40%),
+                        #0F172A;
+            min-height: 100vh;
+        }
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.6s ease-out forwards;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="text-slate-100 flex flex-col items-center justify-start p-4 md:p-8">
+    <div class="w-full max-w-4xl flex flex-col space-y-8 animate-fade-in">
+        <!-- Header -->
+        <header class="text-center py-6">
+            <h1 class="font-outfit font-extrabold text-4xl md:text-5xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-emerald-400">
+                PolicyMind AI
+            </h1>
+            <p class="text-slate-400 mt-3 text-lg font-light tracking-wide">
+                Universal RAG Document Q&A & Intelligence Engine
+            </p>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="grid grid-cols-1 gap-8">
+            <!-- Form Section -->
+            <section class="glass-card rounded-2xl p-6 md:p-8 shadow-2xl">
+                <form id="rag-form" class="space-y-6">
+                    <!-- PDF URL Input -->
+                    <div class="flex flex-col space-y-2">
+                        <label for="doc-url" class="text-sm font-semibold tracking-wider uppercase text-indigo-300">
+                            Document URL (PDF / DOCX / EML)
+                        </label>
+                        <input 
+                            type="url" 
+                            id="doc-url" 
+                            required
+                            placeholder="https://example.com/policy-document.pdf" 
+                            class="w-full bg-slate-900/60 border border-slate-700/80 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition duration-300"
+                        >
+                    </div>
+
+                    <!-- Questions Input -->
+                    <div class="flex flex-col space-y-2">
+                        <label for="questions" class="text-sm font-semibold tracking-wider uppercase text-indigo-300">
+                            Questions (one per line)
+                        </label>
+                        <textarea 
+                            id="questions" 
+                            rows="4" 
+                            required
+                            placeholder="Is rehabilitation covered?&#10;What services are excluded?&#10;Is there a waiting period for pre-existing diseases?" 
+                            class="w-full bg-slate-900/60 border border-slate-700/80 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition duration-300 resize-y font-sans"
+                        ></textarea>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button 
+                        type="submit" 
+                        id="submit-btn"
+                        class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold py-4 px-6 rounded-xl shadow-lg transition duration-300 transform active:scale-[0.99] flex items-center justify-center space-x-2"
+                    >
+                        <span>Analyze Document & Answer</span>
+                    </button>
+                </form>
+            </section>
+
+            <!-- Loading Spinner Section -->
+            <section id="loading-section" class="hidden flex flex-col items-center justify-center py-12 space-y-4">
+                <div class="relative w-16 h-16">
+                    <div class="absolute inset-0 rounded-full border-4 border-slate-800"></div>
+                    <div class="absolute inset-0 rounded-full border-4 border-t-indigo-500 border-r-purple-500 animate-spin"></div>
+                </div>
+                <p class="text-indigo-300 font-medium tracking-wide animate-pulse">
+                    Retrieving knowledge & generating expert answers...
+                </p>
+            </section>
+
+            <!-- Error Banner -->
+            <section id="error-banner" class="hidden bg-rose-950/60 border border-rose-500/50 rounded-xl p-4 flex items-start space-x-3 text-rose-200">
+                <svg class="w-6 h-6 flex-shrink-0 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+                <div class="flex-1">
+                    <h3 class="font-semibold text-sm">Execution Failed</h3>
+                    <p id="error-text" class="text-xs text-rose-300/90 mt-1"></p>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section id="results-section" class="hidden space-y-6">
+                <div class="flex items-center justify-between border-b border-slate-700/60 pb-3">
+                    <h2 class="font-outfit font-bold text-2xl text-emerald-400 flex items-center space-x-2">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <span>Analysis Results</span>
+                    </h2>
+                    <span id="timing-badge" class="bg-emerald-950/60 text-emerald-400 text-xs px-3 py-1.5 rounded-full border border-emerald-500/30 font-medium"></span>
+                </div>
+
+                <div id="results-list" class="space-y-4">
+                    <!-- Dynamic cards go here -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="text-center py-8 text-xs text-slate-500 border-t border-slate-800/40">
+            PolicyMind AI &copy; 2026. Made with ❤️ using Advanced Agentic Coding.
+        </footer>
+    </div>
+
+    <!-- Frontend Logic -->
+    <script>
+        document.getElementById('rag-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const docUrl = document.getElementById('doc-url').value.trim();
+            const questionsText = document.getElementById('questions').value.trim();
+            
+            if (!docUrl || !questionsText) return;
+
+            // Split questions by newline and filter out empty ones
+            const questions = questionsText.split('\n')
+                .map(q => q.trim())
+                .filter(q => q.length > 0);
+
+            if (questions.length === 0) return;
+
+            // Reset UI states
+            document.getElementById('error-banner').classList.add('hidden');
+            document.getElementById('results-section').classList.add('hidden');
+            document.getElementById('loading-section').classList.remove('hidden');
+            
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            try {
+                const response = await fetch('/hackrx/run', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': 'Bearer 7c24cf2255dbef324b90d6280afd52f1',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        documents: docUrl,
+                        questions: questions
+                    })
+                });
+
+                if (!response.ok) {
+                    const errBody = await response.json().catch(() => ({}));
+                    throw new Error(errBody.detail || `Server returned status ${response.status}`);
+                }
+
+                const result = await response.json();
+                renderResults(questions, result);
+
+            } catch (err) {
+                document.getElementById('error-text').textContent = err.message || err;
+                document.getElementById('error-banner').classList.remove('hidden');
+            } finally {
+                document.getElementById('loading-section').classList.add('hidden');
+                submitBtn.disabled = false;
+                submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        });
+
+        function renderResults(questions, result) {
+            const listContainer = document.getElementById('results-list');
+            listContainer.innerHTML = '';
+
+            const answers = result.answers || [];
+            const needsReviewList = result.needs_human_review || [];
+
+            questions.forEach((q, idx) => {
+                const answer = answers[idx] || "No answer generated.";
+                const needsReview = needsReviewList[idx] || false;
+
+                const card = document.createElement('div');
+                card.className = 'glass-card rounded-xl p-5 md:p-6 shadow-md transition duration-300 hover:border-slate-600/50 flex flex-col space-y-3';
+                
+                // Card Header (Question)
+                const header = document.createElement('div');
+                header.className = 'flex items-start justify-between space-x-2';
+                
+                const qText = document.createElement('h4');
+                qText.className = 'font-semibold text-indigo-300 text-base flex-1';
+                qText.textContent = `${idx + 1}. ${q}`;
+                header.appendChild(qText);
+
+                if (needsReview) {
+                    const reviewBadge = document.createElement('span');
+                    reviewBadge.className = 'bg-amber-950/60 text-amber-400 text-[10px] px-2.5 py-1 rounded-full border border-amber-500/30 uppercase font-semibold tracking-wider flex-shrink-0';
+                    reviewBadge.textContent = 'Needs Review';
+                    header.appendChild(reviewBadge);
+                }
+
+                card.appendChild(header);
+
+                // Card Body (Answer)
+                const aText = document.createElement('p');
+                aText.className = 'text-slate-200 text-sm leading-relaxed whitespace-pre-wrap';
+                aText.textContent = answer;
+                card.appendChild(aText);
+
+                listContainer.appendChild(card);
+            });
+
+            // Set timing badge
+            const duration = result.processing_time ? result.processing_time.toFixed(2) : 'N/A';
+            document.getElementById('timing-badge').textContent = `Processed in ${duration}s`;
+            
+            document.getElementById('results-section').classList.remove('hidden');
+            document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>

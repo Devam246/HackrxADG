@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+import os
 import time
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 import structlog
@@ -64,6 +66,16 @@ async def timing_middleware(request: Request, call_next):
     return response
 
 
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def serve_frontend():
+    index_path = os.path.join(os.path.dirname(__file__), "index.html")
+    if os.path.exists(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Frontend index.html not found</h1>", status_code=404)
+
+
 # Include Routers
 app.include_router(health_router)
 app.include_router(query_router)
+

@@ -183,7 +183,7 @@ if DEEPEVAL_AVAILABLE:
                     wait_seconds = backoff
                     match = re.search(r"try again in ([0-9.msh]+)", err_msg)
                     if match:
-                        time_str = match.group(1)
+                        time_str = match.group(1).rstrip(".")
                         try:
                             if "m" in time_str:
                                 parts = time_str.split("m")
@@ -298,6 +298,130 @@ def test_contextual_recall():
 # RAGAS Batch Scoring — prints aggregate scores, does not enforce thresholds
 # ─────────────────────────────────────────────────────────────────────────────
 
+from langchain_groq import ChatGroq
+from langchain_core.outputs import ChatResult
+
+class PatchedChatGroq(ChatGroq):
+    """Subclass of ChatGroq that intercepts the 'n' parameter (not supported by Groq)
+    and implements exponential backoff retry logic for 429 rate limit responses."""
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        import groq
+        import re
+        import time
+        import structlog
+
+        logger = structlog.get_logger(__name__)
+        n = kwargs.pop("n", 1)
+
+        backoff = 2.0
+        max_attempts = 5
+
+        for attempt in range(max_attempts):
+            try:
+                result = super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+                if n > 1:
+                    result.generations = result.generations * n
+                return result
+            except groq.RateLimitError as e:
+                if attempt == max_attempts - 1:
+                    raise e
+                err_msg = str(e)
+                wait_seconds = backoff
+                match = re.search(r"try again in ([0-9.msh]+)", err_msg)
+                if match:
+                    time_str = match.group(1).rstrip(".")
+                    try:
+                        if "m" in time_str:
+                            parts = time_str.split("m")
+                            mins = float(parts[0])
+                            secs = float(parts[1].replace("s", "")) if parts[1] else 0.0
+                            wait_seconds = (mins * 60.0) + secs + 1.5
+                        else:
+                            wait_seconds = float(time_str.replace("s", "")) + 1.5
+                    except Exception:
+                        pass
+                else:
+                    backoff *= 2.0
+
+                logger.warning(
+                    "groq_ragas_rate_limit_hit_retrying",
+                    attempt=attempt + 1,
+                    wait_seconds=round(wait_seconds, 2),
+                    error=err_msg,
+                )
+                time.sleep(wait_seconds)
+            except Exception as e:
+                if attempt == max_attempts - 1:
+                    raise e
+                err_msg = str(e)
+                if "429" in err_msg or "rate_limit" in err_msg.lower():
+                    time.sleep(backoff)
+                    backoff *= 2.0
+                else:
+                    raise e
+
+        raise Exception("Groq generate failed after max retries")
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        import groq
+        import re
+        import structlog
+        import asyncio
+
+        logger = structlog.get_logger(__name__)
+        n = kwargs.pop("n", 1)
+
+        backoff = 2.0
+        max_attempts = 5
+
+        for attempt in range(max_attempts):
+            try:
+                result = await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+                if n > 1:
+                    result.generations = result.generations * n
+                return result
+            except groq.RateLimitError as e:
+                if attempt == max_attempts - 1:
+                    raise e
+                err_msg = str(e)
+                wait_seconds = backoff
+                match = re.search(r"try again in ([0-9.msh]+)", err_msg)
+                if match:
+                    time_str = match.group(1).rstrip(".")
+                    try:
+                        if "m" in time_str:
+                            parts = time_str.split("m")
+                            mins = float(parts[0])
+                            secs = float(parts[1].replace("s", "")) if parts[1] else 0.0
+                            wait_seconds = (mins * 60.0) + secs + 1.5
+                        else:
+                            wait_seconds = float(time_str.replace("s", "")) + 1.5
+                    except Exception:
+                        pass
+                else:
+                    backoff *= 2.0
+
+                logger.warning(
+                    "groq_ragas_async_rate_limit_hit_retrying",
+                    attempt=attempt + 1,
+                    wait_seconds=round(wait_seconds, 2),
+                    error=err_msg,
+                )
+                await asyncio.sleep(wait_seconds)
+            except Exception as e:
+                if attempt == max_attempts - 1:
+                    raise e
+                err_msg = str(e)
+                if "429" in err_msg or "rate_limit" in err_msg.lower():
+                    await asyncio.sleep(backoff)
+                    backoff *= 2.0
+                else:
+                    raise e
+
+        raise Exception("Groq agenerate failed after max retries")
+
+
 @_needs_ragas
 def test_ragas_batch_scores():
     """
@@ -322,8 +446,7 @@ def test_ragas_batch_scores():
     dataset = Dataset.from_dict(data)
 
     if EVAL_JUDGE_PROVIDER == "groq":
-        from langchain_groq import ChatGroq
-        chat_model = ChatGroq(
+        chat_model = PatchedChatGroq(
             model="llama-3.3-70b-versatile",
             groq_api_key=GROQ_API_KEY,
             temperature=0,

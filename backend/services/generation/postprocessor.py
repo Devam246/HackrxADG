@@ -10,34 +10,59 @@ def parse_json_response(content: str) -> List[str]:
     """
     Robust JSON parsing with multiple fallback strategies
     """
-    try:
-        return json.loads(content)["answers"]
-    except Exception:
-        pass
+    content_cleaned = content.strip()
+    
+    # Remove markdown code blocks if present
+    cleaned = re.sub(r"^```(?:json)?\s*", "", content_cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
+    cleaned = cleaned.strip()
 
-    try:
-        cleaned = re.sub(r"^```json\s*", "", content, flags=re.MULTILINE)
-        cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
-        cleaned = cleaned.strip()
-        return json.loads(cleaned)["answers"]
-    except Exception:
-        pass
+    # Strategy 1: Check if it's a JSON object with "answers" key
+    for json_str in [content_cleaned, cleaned]:
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, dict) and "answers" in parsed:
+                if isinstance(parsed["answers"], list):
+                    return [str(a) for a in parsed["answers"]]
+                elif isinstance(parsed["answers"], str):
+                    return [parsed["answers"]]
+        except Exception:
+            pass
 
+    # Strategy 2: Check if it's a JSON list/array of strings directly
+    for json_str in [content_cleaned, cleaned]:
+        try:
+            parsed = json.loads(json_str)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except Exception:
+            pass
+
+    # Strategy 3: Regex search for "answers" key or array inside JSON
     try:
-        json_match = re.search(r'\{.*?"answers"\s*:\s*\[.*?\].*?\}', content, re.DOTALL)
+        json_match = re.search(r'\{.*?"answers"\s*:\s*\[.*?\].*?\}', content_cleaned, re.DOTALL)
         if json_match:
             json_str = json_match.group(0)
-            return json.loads(json_str)["answers"]
+            parsed = json.loads(json_str)
+            if isinstance(parsed, dict) and "answers" in parsed and isinstance(parsed["answers"], list):
+                return [str(a) for a in parsed["answers"]]
     except Exception:
         pass
 
     try:
-        answers_match = re.search(r'"answers"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+        answers_match = re.search(r'"answers"\s*:\s*\[(.*?)\]', content_cleaned, re.DOTALL)
         if answers_match:
             answers_str = f'{{"answers": [{answers_match.group(1)}]}}'
-            return json.loads(answers_str)["answers"]
+            parsed = json.loads(answers_str)
+            if isinstance(parsed, dict) and "answers" in parsed and isinstance(parsed["answers"], list):
+                return [str(a) for a in parsed["answers"]]
     except Exception:
         pass
+
+    # Strategy 4: Fallback to returning the cleaned string itself as a single-element list
+    if cleaned and not cleaned.startswith("{") and not cleaned.startswith("["):
+        if len(cleaned) > 5:
+            return [cleaned]
 
     return None
 
@@ -48,51 +73,52 @@ def extract_answers_fallback(content: str) -> List[str]:
     """
     answers = []
 
-    quoted_text = re.findall(r'"([^"]{20,500})"', content)
+    # Clean code blocks first
+    cleaned = re.sub(r"^```(?:json)?\s*", "", content, flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
+    cleaned = cleaned.strip()
+
+    # Try json load directly
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed]
+        if isinstance(parsed, dict) and "answers" in parsed:
+            return [str(a) for a in parsed["answers"]]
+    except Exception:
+        pass
+
+    # If it starts and ends with bracket and quotes, try to strip them
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        inner = cleaned[1:-1].strip()
+        quoted = re.findall(r'"([^"]*)"', inner)
+        if quoted:
+            return quoted
+        quoted_single = re.findall(r"'([^']*)'", inner)
+        if quoted_single:
+            return quoted_single
+
+    quoted_text = re.findall(r'"([^"]{10,1000})"', cleaned)
     for text in quoted_text:
-        if any(
-            keyword in text.lower()
-            for keyword in [
-                "period",
-                "coverage",
-                "policy",
-                "days",
-                "months",
-                "years",
-                "benefit",
-                "claim",
-            ]
-        ):
-            answers.append(text)
+        answers.append(text)
 
     if not answers:
-        lines = content.split("\n")
+        lines = cleaned.split("\n")
         for line in lines:
             if re.match(r"^\d+[.)]\s*", line.strip()):
                 answer = re.sub(r"^\d+[.)]\s*", "", line.strip())
-                if len(answer) > 10:
+                if len(answer) > 5:
                     answers.append(answer)
 
     if not answers:
-        sentences = re.split(r"[.!?]+", content)
-        for sentence in sentences:
-            if len(sentence.strip()) > 20 and any(
-                keyword in sentence.lower()
-                for keyword in [
-                    "period",
-                    "coverage",
-                    "policy",
-                    "waiting",
-                    "claim",
-                    "benefit",
-                ]
-            ):
-                answers.append(sentence.strip())
+        if len(cleaned) > 5:
+            answers.append(cleaned)
 
     answers = answers[:10]
-    answers = [ans[:500] for ans in answers]
+    answers = [ans[:1000] for ans in answers]
 
     return answers if answers else ["Unable to extract answer from response"] * 5
+
 
 
 def calculate_universal_confidence(query: str, retrieved_chunks: List[Dict], doc_type: str) -> float:
