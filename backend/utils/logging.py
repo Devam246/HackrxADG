@@ -1,4 +1,3 @@
-import spacy
 import structlog
 
 
@@ -17,7 +16,13 @@ logger = structlog.get_logger(__name__)
 
 def load_spacy_model():
     try:
-        return spacy.load("en_core_web_sm")
-    except OSError:
-        logger.warning("spacy_model_missing", fallback="blank_en")
-        return spacy.blank("en")
+        import spacy
+        try:
+            return spacy.load("en_core_web_sm")
+        except OSError:
+            logger.warning("spacy_model_missing", fallback="blank_en")
+            return spacy.blank("en")
+    except ImportError:
+        logger.warning("spacy_not_installed", fallback="None")
+        return None
+
