@@ -2,6 +2,7 @@ services:
   - type: web
     name: policymind-ai
     runtime: python
+    pythonVersion: "3.13.3"
     buildCommand: "pip install -r backend/requirements.txt"
     startCommand: "python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT"
     envVars:
